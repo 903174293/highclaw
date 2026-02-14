@@ -1,0 +1,1185 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HighClaw - AI Gateway Control Panel</title>
+    <script src="https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.7/dist/axios.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            /* 主色调 - 紫色渐变系 (HotAITool 风格) */
+            --primary: #8B5CF6;
+            --primary-dark: #7C3AED;
+            --primary-light: #A78BFA;
+
+            /* 辅助色 */
+            --accent: #EC4899;
+            --success: #10B981;
+            --warning: #F59E0B;
+            --error: #EF4444;
+            --info: #3B82F6;
+
+            /* 背景色 - 深色渐变 */
+            --bg-dark: #0F0F23;
+            --bg-card: #1A1A2E;
+            --bg-hover: #252538;
+
+            /* 文字色 */
+            --text-light: #F3F4F6;
+            --text-muted: #9CA3AF;
+            --text-dim: #6B7280;
+
+            /* 边框色 */
+            --border: #252538;
+            --border-light: #374151;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #0F0F23 0%, #1E1B4B 50%, #1A1A2E 100%);
+            background-attachment: fixed;
+            color: var(--text-light);
+            line-height: 1.6;
+        }
+
+        #app {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 260px;
+            background: rgba(21, 27, 61, 0.8);
+            backdrop-filter: blur(10px);
+            border-right: 1px solid var(--border);
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 4px 0 24px rgba(0, 0, 0, 0.3);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .logo-icon {
+            font-size: 2.2em;
+            filter: drop-shadow(0 0 8px rgba(139, 92, 246, 0.6));
+        }
+
+        .logo-text h1 {
+            font-size: 1.5em;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-weight: 700;
+        }
+
+        .logo-text p {
+            font-size: 0.8em;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        .nav-menu {
+            list-style: none;
+            flex: 1;
+            overflow-y: auto;
+            padding-right: 8px;
+        }
+
+        .nav-menu::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .nav-menu::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .nav-menu::-webkit-scrollbar-thumb {
+            background: var(--border-light);
+            border-radius: 4px;
+        }
+
+        .nav-menu::-webkit-scrollbar-thumb:hover {
+            background: var(--primary);
+        }
+
+        .nav-section {
+            margin-top: 24px;
+            margin-bottom: 8px;
+        }
+
+        .nav-section:first-child {
+            margin-top: 0;
+        }
+
+        .nav-section-title {
+            font-size: 0.75em;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-dim);
+            padding: 8px 16px;
+            margin-bottom: 4px;
+        }
+
+        .nav-item {
+            margin-bottom: 2px;
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            color: var(--text-light);
+            text-decoration: none;
+            border-radius: 8px;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+
+        .nav-link:hover {
+            background: linear-gradient(90deg, rgba(139, 92, 246, 0.1) 0%, rgba(167, 139, 250, 0.05) 100%);
+            color: var(--primary-light);
+            transform: translateX(4px);
+        }
+
+        .nav-link.active {
+            background: linear-gradient(90deg, var(--primary) 0%, var(--primary-light) 100%);
+            color: white;
+            font-weight: 600;
+            box-shadow: 0 4px 16px rgba(139, 92, 246, 0.4);
+        }
+
+        .nav-link i {
+            width: 20px;
+            text-align: center;
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            padding: 30px;
+            overflow-y: auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+
+        .header h2 {
+            font-size: 2em;
+            color: var(--text-light);
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 20px;
+            background: linear-gradient(135deg, rgba(0, 230, 118, 0.15) 0%, rgba(0, 230, 118, 0.05) 100%);
+            border: 1px solid rgba(0, 230, 118, 0.3);
+            color: var(--success);
+            border-radius: 24px;
+            font-size: 0.9em;
+            font-weight: 600;
+            box-shadow: 0 4px 12px rgba(0, 230, 118, 0.1);
+        }
+
+        .status-badge.offline {
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.15) 0%, rgba(239, 68, 68, 0.05) 100%);
+            border-color: rgba(239, 68, 68, 0.3);
+            color: var(--error);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.15);
+        }
+
+        .pulse {
+            width: 8px;
+            height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+            box-shadow: 0 0 8px var(--success);
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+
+            50% {
+                opacity: 0.6;
+                transform: scale(1.1);
+            }
+        }
+
+        /* Cards */
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: linear-gradient(135deg, rgba(21, 27, 61, 0.6) 0%, rgba(30, 39, 73, 0.4) 100%);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border-light);
+            border-radius: 16px;
+            padding: 24px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--primary) 0%, var(--primary-light) 100%);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .card:hover {
+            transform: translateY(-6px);
+            box-shadow: 0 12px 32px rgba(139, 92, 246, 0.2);
+            border-color: var(--primary);
+        }
+
+        .card:hover::before {
+            opacity: 1;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .card-title {
+            font-size: 0.9em;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .card-icon {
+            font-size: 1.5em;
+            color: var(--primary);
+        }
+
+        .card-value {
+            font-size: 2.5em;
+            font-weight: 700;
+            color: var(--text-light);
+            margin-bottom: 8px;
+        }
+
+        .card-label {
+            font-size: 0.9em;
+            color: var(--text-muted);
+        }
+
+        /* Chat Interface */
+        .chat-container {
+            background: linear-gradient(135deg, rgba(21, 27, 61, 0.6) 0%, rgba(30, 39, 73, 0.4) 100%);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border-light);
+            border-radius: 16px;
+            height: 600px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+        }
+
+        .chat-messages {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .message {
+            margin-bottom: 16px;
+            display: flex;
+            gap: 12px;
+        }
+
+        .message.user {
+            flex-direction: row-reverse;
+        }
+
+        .message-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 700;
+            flex-shrink: 0;
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
+        }
+
+        .message.user .message-avatar {
+            background: linear-gradient(135deg, var(--accent) 0%, #F472B6 100%);
+            box-shadow: 0 4px 12px rgba(236, 72, 153, 0.4);
+        }
+
+        .message-content {
+            max-width: 70%;
+            background: rgba(21, 27, 61, 0.6);
+            border: 1px solid var(--border-light);
+            padding: 14px 18px;
+            border-radius: 16px;
+            line-height: 1.6;
+        }
+
+        .message.user .message-content {
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(167, 139, 250, 0.1) 100%);
+            border-color: var(--primary);
+        }
+
+        .chat-input-container {
+            padding: 20px;
+            border-top: 1px solid var(--border);
+        }
+
+        .chat-input-wrapper {
+            display: flex;
+            gap: 12px;
+        }
+
+        .chat-input {
+            flex: 1;
+            background: rgba(21, 27, 61, 0.6);
+            border: 1px solid var(--border-light);
+            border-radius: 12px;
+            padding: 14px 18px;
+            color: var(--text-light);
+            font-size: 1em;
+            transition: all 0.3s;
+        }
+
+        .chat-input:focus {
+            outline: none;
+            border-color: var(--primary);
+            background: rgba(26, 26, 46, 0.8);
+            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
+        }
+
+        .chat-input::placeholder {
+            color: var(--text-dim);
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+            color: white;
+            font-weight: 600;
+            box-shadow: 0 4px 16px rgba(139, 92, 246, 0.4);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-primary::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+            transition: left 0.5s;
+        }
+
+        .btn-primary:hover::before {
+            left: 100%;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(139, 92, 246, 0.5);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Table */
+        .table-container {
+            background: linear-gradient(135deg, rgba(21, 27, 61, 0.6) 0%, rgba(30, 39, 73, 0.4) 100%);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border-light);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        thead {
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(167, 139, 250, 0.03) 100%);
+            border-bottom: 2px solid var(--border-light);
+        }
+
+        th {
+            padding: 16px;
+            text-align: left;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            font-size: 0.85em;
+            letter-spacing: 0.5px;
+        }
+
+        td {
+            padding: 16px;
+            border-top: 1px solid var(--border);
+        }
+
+        tr:hover {
+            background: rgba(139, 92, 246, 0.05);
+        }
+
+        tbody tr {
+            transition: background 0.2s;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+
+        .badge-success {
+            background: linear-gradient(135deg, rgba(0, 230, 118, 0.15) 0%, rgba(0, 230, 118, 0.05) 100%);
+            border: 1px solid rgba(0, 230, 118, 0.3);
+            color: var(--success);
+        }
+
+        .badge-warning {
+            background: linear-gradient(135deg, rgba(255, 214, 0, 0.15) 0%, rgba(255, 214, 0, 0.05) 100%);
+            border: 1px solid rgba(255, 214, 0, 0.3);
+            color: var(--warning);
+        }
+
+        .badge-error {
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.15) 0%, rgba(239, 68, 68, 0.05) 100%);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: var(--error);
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-muted);
+        }
+
+        .spinner {
+            border: 3px solid rgba(139, 92, 246, 0.1);
+            border-top: 3px solid var(--primary);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+            box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app">
+        <div class="sidebar">
+            <div class="logo">
+                <div class="logo-icon">🦀</div>
+                <div class="logo-text">
+                    <h1>HighClaw</h1>
+                    <p>AI Gateway</p>
+                </div>
+            </div>
+            <ul class="nav-menu">
+                <!-- Chat -->
+                <li class="nav-section">
+                    <div class="nav-section-title">Chat</div>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" :class="{active: currentView === 'chat'}" @click="currentView = 'chat'">
+                        <i class="fas fa-comments"></i>
+                        <span>Chat</span>
+                    </a>
+                </li>
+
+                <!-- Control -->
+                <li class="nav-section">
+                    <div class="nav-section-title">Control</div>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" :class="{active: currentView === 'overview'}" @click="currentView = 'overview'">
+                        <i class="fas fa-tachometer-alt"></i>
+                        <span>Overview</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" :class="{active: currentView === 'channels'}" @click="currentView = 'channels'">
+                        <i class="fas fa-broadcast-tower"></i>
+                        <span>Channels</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" :class="{active: currentView === 'instances'}"
+                        @click="currentView = 'instances'">
+                        <i class="fas fa-server"></i>
+                        <span>Instances</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" :class="{active: currentView === 'sessions'}" @click="currentView = 'sessions'">
+                        <i class="fas fa-users"></i>
+                        <span>Sessions</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" :class="{active: currentView === 'cron'}" @click="currentView = 'cron'">
+                        <i class="fas fa-clock"></i>
+                        <span>Cron Jobs</span>
+                    </a>
+                </li>
+
+                <!-- Agent -->
+                <li class="nav-section">
+                    <div class="nav-section-title">Agent</div>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" :class="{active: currentView === 'skills'}" @click="currentView = 'skills'">
+                        <i class="fas fa-magic"></i>
+                        <span>Skills</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" :class="{active: currentView === 'nodes'}" @click="currentView = 'nodes'">
+                        <i class="fas fa-network-wired"></i>
+                        <span>Nodes</span>
+                    </a>
+                </li>
+
+                <!-- Settings -->
+                <li class="nav-section">
+                    <div class="nav-section-title">Settings</div>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" :class="{active: currentView === 'config'}" @click="currentView = 'config'">
+                        <i class="fas fa-cog"></i>
+                        <span>Config</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" :class="{active: currentView === 'debug'}" @click="currentView = 'debug'">
+                        <i class="fas fa-bug"></i>
+                        <span>Debug</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" :class="{active: currentView === 'logs'}" @click="currentView = 'logs'">
+                        <i class="fas fa-file-alt"></i>
+                        <span>Logs</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" :class="{active: currentView === 'resources'}"
+                        @click="currentView = 'resources'">
+                        <i class="fas fa-database"></i>
+                        <span>Resources</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" :class="{active: currentView === 'docs'}" @click="currentView = 'docs'">
+                        <i class="fas fa-book"></i>
+                        <span>Docs</span>
+                    </a>
+                </li>
+            </ul>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- 概述 View -->
+            <div v-if="currentView === 'overview'">
+                <div class="header">
+                    <h2>概述</h2>
+                    <div class="status-badge" :class="{offline: !isOnline}">
+                        <div class="pulse" v-if="isOnline"></div>
+                        <span>{{ isOnline ? '在线' : '离线' }}</span>
+                    </div>
+                </div>
+
+                <div class="cards-grid">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">Models</span>
+                            <i class="fas fa-brain card-icon"></i>
+                        </div>
+                        <div class="card-value">{{ modelCount }}</div>
+                        <div class="card-label">Available Models</div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">Providers</span>
+                            <i class="fas fa-server card-icon"></i>
+                        </div>
+                        <div class="card-value">{{ providerCount }}</div>
+                        <div class="card-label">AI Providers</div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">Channels</span>
+                            <i class="fas fa-broadcast-tower card-icon"></i>
+                        </div>
+                        <div class="card-value">{{ channelCount }}</div>
+                        <div class="card-label">Active Channels</div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">Uptime</span>
+                            <i class="fas fa-clock card-icon"></i>
+                        </div>
+                        <div class="card-value">{{ status?.uptime || '0h' }}</div>
+                        <div class="card-label">Gateway Uptime</div>
+                    </div>
+                </div>
+
+                <div class="table-container" v-if="status">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Component</th>
+                                <th>Status</th>
+                                <th>Version</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><i class="fas fa-server"></i> Gateway</td>
+                                <td><span class="badge badge-success">Running</span></td>
+                                <td>{{ status.version || 'N/A' }}</td>
+                                <td>Port {{ status.port || '18790' }}</td>
+                            </tr>
+                            <tr>
+                                <td><i class="fas fa-brain"></i> AI Model</td>
+                                <td><span class="badge badge-success">Ready</span></td>
+                                <td>{{ config?.agent?.model || 'N/A' }}</td>
+                                <td>{{ providers.length }} providers</td>
+                            </tr>
+                            <tr>
+                                <td><i class="fas fa-database"></i> Storage</td>
+                                <td><span class="badge badge-success">Connected</span></td>
+                                <td>Local</td>
+                                <td>{{ config?.agent?.workspace || 'N/A' }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Chat View -->
+            <div v-if="currentView === 'chat'">
+                <div class="header">
+                    <h2>Chat <span style="color: var(--text-muted); font-size: 0.6em;">/ {{ currentSession }}</span>
+                    </h2>
+                </div>
+
+                <div class="chat-container">
+                    <div class="chat-messages" ref="chatMessages">
+                        <div v-if="messages.length === 0" class="loading">
+                            <p>Start a conversation with your AI assistant</p>
+                        </div>
+                        <div v-for="(message, index) in messages" :key="index" class="message" :class="message.role">
+                            <div class="message-avatar">
+                                {{ message.role === 'user' ? 'U' : 'AI' }}
+                            </div>
+                            <div class="message-content">
+                                {{ message.content }}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="chat-input-container">
+                        <div class="chat-input-wrapper">
+                            <input type="text" class="chat-input" v-model="chatInput" @keyup.enter="sendMessage"
+                                placeholder="Type your message..." :disabled="sending" />
+                            <button class="btn btn-primary" @click="sendMessage"
+                                :disabled="sending || !chatInput.trim()">
+                                <i class="fas fa-paper-plane"></i>
+                                {{ sending ? 'Sending...' : 'Send' }}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Models View -->
+            <div v-if="currentView === 'models'">
+                <div class="header">
+                    <h2>Models</h2>
+                </div>
+
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Provider</th>
+                                <th>Model ID</th>
+                                <th>Name</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="model in models" :key="model.id">
+                                <td>{{ model.provider }}</td>
+                                <td><code>{{ model.id }}</code></td>
+                                <td>{{ model.name || model.id }}</td>
+                                <td><span class="badge badge-success">Available</span></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 频道 View -->
+            <div v-if="currentView === 'channels'">
+                <div class="header">
+                    <h2>频道</h2>
+                </div>
+
+                <div class="cards-grid">
+                    <div class="card" v-for="channel in channels" :key="channel.id">
+                        <div class="card-header">
+                            <span class="card-title">{{ channel.name }}</span>
+                            <i :class="channel.icon || 'fas fa-broadcast-tower'" class="card-icon"></i>
+                        </div>
+                        <div class="card-value">
+                            <span class="badge" :class="{
+                                'badge-success': channel.status === 'connected',
+                                'badge-warning': channel.status === 'connecting',
+                                'badge-error': channel.status === 'disconnected'
+                            }">
+                                {{ channel.status || 'Unknown' }}
+                            </span>
+                        </div>
+                        <div class="card-label">{{ channel.description || 'No description' }}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 实例 View -->
+            <div v-if="currentView === 'instances'">
+                <div class="header">
+                    <h2>实例</h2>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>实例 ID</th>
+                                <th>类型</th>
+                                <th>状态</th>
+                                <th>启动时间</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>instance-001</code></td>
+                                <td>Gateway</td>
+                                <td><span class="badge badge-success">运行中</span></td>
+                                <td>{{ new Date().toLocaleString() }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 会话 View -->
+            <div v-if="currentView === 'sessions'">
+                <div class="header">
+                    <h2>会话</h2>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>会话 ID</th>
+                                <th>频道</th>
+                                <th>用户</th>
+                                <th>消息数</th>
+                                <th>最后活动</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-if="sessions.length === 0">
+                                <td colspan="5" style="text-align: center; color: var(--text-muted);">暂无会话</td>
+                            </tr>
+                            <tr v-for="session in sessions" :key="session.id">
+                                <td><code>{{ session.id }}</code></td>
+                                <td>{{ session.channel }}</td>
+                                <td>{{ session.user }}</td>
+                                <td>{{ session.messageCount }}</td>
+                                <td>{{ session.lastActivity }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 定时任务 View -->
+            <div v-if="currentView === 'cron'">
+                <div class="header">
+                    <h2>定时任务</h2>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>任务名称</th>
+                                <th>Cron 表达式</th>
+                                <th>状态</th>
+                                <th>下次执行</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-if="cronJobs.length === 0">
+                                <td colspan="4" style="text-align: center; color: var(--text-muted);">暂无定时任务</td>
+                            </tr>
+                            <tr v-for="job in cronJobs" :key="job.id">
+                                <td>{{ job.name }}</td>
+                                <td><code>{{ job.cron }}</code></td>
+                                <td><span class="badge badge-success">{{ job.status }}</span></td>
+                                <td>{{ job.nextRun }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 技能 View -->
+            <div v-if="currentView === 'skills'">
+                <div class="header">
+                    <h2>技能</h2>
+                </div>
+                <div class="cards-grid">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">代码执行</span>
+                            <i class="fas fa-code card-icon"></i>
+                        </div>
+                        <div class="card-value">
+                            <span class="badge badge-success">已启用</span>
+                        </div>
+                        <div class="card-label">执行 Python、JavaScript 等代码</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">文件操作</span>
+                            <i class="fas fa-folder card-icon"></i>
+                        </div>
+                        <div class="card-value">
+                            <span class="badge badge-success">已启用</span>
+                        </div>
+                        <div class="card-label">读写文件、管理目录</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">网络请求</span>
+                            <i class="fas fa-globe card-icon"></i>
+                        </div>
+                        <div class="card-value">
+                            <span class="badge badge-success">已启用</span>
+                        </div>
+                        <div class="card-label">HTTP 请求、API 调用</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 节点 View -->
+            <div v-if="currentView === 'nodes'">
+                <div class="header">
+                    <h2>节点</h2>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>节点 ID</th>
+                                <th>类型</th>
+                                <th>地址</th>
+                                <th>状态</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-if="nodes.length === 0">
+                                <td colspan="4" style="text-align: center; color: var(--text-muted);">暂无节点</td>
+                            </tr>
+                            <tr v-for="node in nodes" :key="node.id">
+                                <td><code>{{ node.id }}</code></td>
+                                <td>{{ node.type }}</td>
+                                <td>{{ node.address }}</td>
+                                <td><span class="badge badge-success">{{ node.status }}</span></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 配置 View -->
+            <div v-if="currentView === 'config'">
+                <div class="header">
+                    <h2>配置</h2>
+                </div>
+
+                <div class="table-container" v-if="config">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>配置项</th>
+                                <th>值</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>默认模型</td>
+                                <td><code>{{ config.agent?.model || 'N/A' }}</code></td>
+                            </tr>
+                            <tr>
+                                <td>工作空间</td>
+                                <td><code>{{ config.agent?.workspace || 'N/A' }}</code></td>
+                            </tr>
+                            <tr>
+                                <td>网关端口</td>
+                                <td><code>{{ config.gateway?.port || '18790' }}</code></td>
+                            </tr>
+                            <tr>
+                                <td>网关绑定</td>
+                                <td><code>{{ config.gateway?.bind || 'loopback' }}</code></td>
+                            </tr>
+                            <tr>
+                                <td>网关模式</td>
+                                <td><code>{{ config.gateway?.mode || 'local' }}</code></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 调试 View -->
+            <div v-if="currentView === 'debug'">
+                <div class="header">
+                    <h2>调试</h2>
+                </div>
+                <div class="cards-grid">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">WebSocket</span>
+                            <i class="fas fa-plug card-icon"></i>
+                        </div>
+                        <div class="card-value">
+                            <span class="badge badge-success">已连接</span>
+                        </div>
+                        <div class="card-label">实时通信状态</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">内存使用</span>
+                            <i class="fas fa-memory card-icon"></i>
+                        </div>
+                        <div class="card-value">256 MB</div>
+                        <div class="card-label">当前内存占用</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">请求数</span>
+                            <i class="fas fa-chart-line card-icon"></i>
+                        </div>
+                        <div class="card-value">1,234</div>
+                        <div class="card-label">总请求次数</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 日志 View -->
+            <div v-if="currentView === 'logs'">
+                <div class="header">
+                    <h2>日志</h2>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>级别</th>
+                                <th>消息</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>{{ new Date().toLocaleString() }}</td>
+                                <td><span class="badge badge-success">INFO</span></td>
+                                <td>Gateway started successfully</td>
+                            </tr>
+                            <tr>
+                                <td>{{ new Date().toLocaleString() }}</td>
+                                <td><span class="badge badge-success">INFO</span></td>
+                                <td>WebSocket connection established</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 资源 View -->
+            <div v-if="currentView === 'resources'">
+                <div class="header">
+                    <h2>资源</h2>
+                </div>
+                <div class="cards-grid">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">CPU</span>
+                            <i class="fas fa-microchip card-icon"></i>
+                        </div>
+                        <div class="card-value">12%</div>
+                        <div class="card-label">CPU 使用率</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">内存</span>
+                            <i class="fas fa-memory card-icon"></i>
+                        </div>
+                        <div class="card-value">256 MB</div>
+                        <div class="card-label">内存占用</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">磁盘</span>
+                            <i class="fas fa-hdd card-icon"></i>
+                        </div>
+                        <div class="card-value">1.2 GB</div>
+                        <div class="card-label">磁盘使用</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">网络</span>
+                            <i class="fas fa-network-wired card-icon"></i>
+                        </div>
+                        <div class="card-value">128 KB/s</div>
+                        <div class="card-label">网络流量</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 文档 View -->
+            <div v-if="currentView === 'docs'">
+                <div class="header">
+                    <h2>文档</h2>
+                </div>
+                <div class="cards-grid">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">快速开始</span>
+                            <i class="fas fa-rocket card-icon"></i>
+                        </div>
+                        <div class="card-label">了解如何快速开始使用 HighClaw</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">API 文档</span>
+                            <i class="fas fa-book card-icon"></i>
+                        </div>
+                        <div class="card-label">查看完整的 API 接口文档</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">配置指南</span>
+                            <i class="fas fa-cog card-icon"></i>
+                        </div>
+                        <div class="card-label">学习如何配置和优化 HighClaw</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">常见问题</span>
+                            <i class="fas fa-question-circle card-icon"></i>
+                        </div>
+                        <div class="card-label">查看常见问题和解决方案</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+
+</html>
