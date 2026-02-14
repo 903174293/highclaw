@@ -13,7 +13,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/highclaw/highclaw/internal/agent"
+	skillapp "github.com/highclaw/highclaw/internal/application/skill"
 	"github.com/highclaw/highclaw/internal/config"
+	"github.com/highclaw/highclaw/internal/gateway/session"
 )
 
 //go:embed static/*
@@ -21,14 +24,19 @@ var staticFiles embed.FS
 
 // Server represents the HTTP/WebSocket server.
 type Server struct {
-	router   *gin.Engine
-	cfg      *config.Config
-	logger   *slog.Logger
-	upgrader websocket.Upgrader
+	router    *gin.Engine
+	cfg       *config.Config
+	logger    *slog.Logger
+	upgrader  websocket.Upgrader
+	agent     *agent.Runner
+	sessions  *session.Manager
+	skills    *skillapp.Manager
+	logBuffer *LogBuffer
+	startedAt time.Time
 }
 
 // NewServer creates a new HTTP server.
-func NewServer(cfg *config.Config, logger *slog.Logger) *Server {
+func NewServer(cfg *config.Config, logger *slog.Logger, runner *agent.Runner, sessions *session.Manager, skills *skillapp.Manager, logBuffer *LogBuffer) *Server {
 	// Set Gin mode
 	if cfg.Gateway.Mode == "production" {
 		gin.SetMode(gin.ReleaseMode)
@@ -42,9 +50,14 @@ func NewServer(cfg *config.Config, logger *slog.Logger) *Server {
 	router.Use(corsMiddleware())
 
 	s := &Server{
-		router: router,
-		cfg:    cfg,
-		logger: logger,
+		router:    router,
+		cfg:       cfg,
+		logger:    logger,
+		agent:     runner,
+		sessions:  sessions,
+		skills:    skills,
+		logBuffer: logBuffer,
+		startedAt: time.Now(),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true // TODO: Implement proper origin checking
@@ -86,6 +99,13 @@ func (s *Server) setupRoutes() {
 		// Models
 		api.GET("/models", s.handleListModels)
 		api.GET("/providers", s.handleListProviders)
+
+		// Skills
+		api.GET("/skills", s.handleListSkills)
+
+		// Runtime & Logs
+		api.GET("/runtime/stats", s.handleRuntimeStats)
+		api.GET("/logs", s.handleLogs)
 	}
 
 	// WebSocket

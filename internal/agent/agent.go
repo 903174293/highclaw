@@ -153,7 +153,7 @@ func (m *ModelManager) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 	case "anthropic":
 		return m.callAnthropic(ctx, req, modelName)
 	case "openai":
-		return nil, fmt.Errorf("OpenAI provider not yet implemented")
+		return m.callOpenAI(ctx, req, modelName)
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", provider)
 	}
@@ -204,6 +204,57 @@ func (m *ModelManager) callAnthropic(ctx context.Context, req *ChatRequest, mode
 			OutputTokens: resp.Usage.OutputTokens,
 			CacheRead:    resp.Usage.CacheRead,
 			CacheWrite:   resp.Usage.CacheWrite,
+		},
+	}, nil
+}
+
+// callOpenAI calls the OpenAI Chat Completions API.
+func (m *ModelManager) callOpenAI(ctx context.Context, req *ChatRequest, model string) (*ChatResponse, error) {
+	providerCfg, ok := m.cfg.Agent.Providers["openai"]
+	if !ok || providerCfg.APIKey == "" {
+		return nil, fmt.Errorf("OpenAI API key not configured")
+	}
+
+	client := providers.NewOpenAIClient(providerCfg.APIKey)
+
+	// Build messages: system prompt + conversation messages.
+	messages := make([]providers.OpenAIMessage, 0, len(req.Messages)+1)
+	if req.SystemPrompt != "" {
+		messages = append(messages, providers.OpenAIMessage{
+			Role:    "system",
+			Content: req.SystemPrompt,
+		})
+	}
+	for _, msg := range req.Messages {
+		messages = append(messages, providers.OpenAIMessage{
+			Role:    msg.Role,
+			Content: msg.Content,
+		})
+	}
+
+	openaiReq := &providers.OpenAIChatRequest{
+		Model:       model,
+		Messages:    messages,
+		MaxTokens:   req.MaxTokens,
+		Temperature: req.Temperature,
+	}
+
+	resp, err := client.Chat(ctx, openaiReq)
+	if err != nil {
+		return nil, fmt.Errorf("openai API call: %w", err)
+	}
+
+	// Extract content from the first choice.
+	var content string
+	if len(resp.Choices) > 0 {
+		content = resp.Choices[0].Message.Content
+	}
+
+	return &ChatResponse{
+		Content: content,
+		Usage: TokenUsage{
+			InputTokens:  resp.Usage.PromptTokens,
+			OutputTokens: resp.Usage.CompletionTokens,
 		},
 	}, nil
 }

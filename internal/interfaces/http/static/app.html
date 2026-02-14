@@ -7,6 +7,7 @@
     <title>HighClaw - AI Gateway Control Panel</title>
     <script src="https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.7/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
         * {
@@ -520,6 +521,152 @@
             color: var(--error);
         }
 
+        .badge-info {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.15) 0%, rgba(59, 130, 246, 0.05) 100%);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            color: var(--info);
+        }
+
+        /* Chat textarea */
+        .chat-textarea {
+            flex: 1;
+            background: rgba(21, 27, 61, 0.6);
+            border: 1px solid var(--border-light);
+            border-radius: 12px;
+            padding: 14px 18px;
+            color: var(--text-light);
+            font-size: 1em;
+            font-family: inherit;
+            line-height: 1.5;
+            resize: none;
+            min-height: 48px;
+            max-height: 160px;
+            transition: all 0.3s;
+        }
+
+        .chat-textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            background: rgba(26, 26, 46, 0.8);
+            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
+        }
+
+        .chat-textarea::placeholder {
+            color: var(--text-dim);
+        }
+
+        /* Typing indicator */
+        .typing-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 18px;
+            color: var(--text-muted);
+            font-size: 0.9em;
+        }
+
+        .typing-dots {
+            display: flex;
+            gap: 4px;
+        }
+
+        .typing-dots span {
+            width: 6px;
+            height: 6px;
+            background: var(--primary-light);
+            border-radius: 50%;
+            animation: typingBounce 1.4s infinite ease-in-out;
+        }
+
+        .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typingBounce {
+            0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+
+        /* Markdown content in messages */
+        .message-content pre {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            overflow-x: auto;
+            margin: 8px 0;
+        }
+
+        .message-content code {
+            background: rgba(139, 92, 246, 0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+
+        .message-content pre code {
+            background: none;
+            padding: 0;
+        }
+
+        .message-content p {
+            margin: 4px 0;
+        }
+
+        .message-content ul, .message-content ol {
+            padding-left: 20px;
+            margin: 8px 0;
+        }
+
+        /* Button variants */
+        .btn-sm {
+            padding: 6px 14px;
+            font-size: 0.85em;
+            border-radius: 6px;
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, var(--error) 0%, #DC2626 100%);
+            color: white;
+            border: none;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
+        }
+
+        .btn-danger:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+        }
+
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-muted);
+            border: 1px solid var(--border-light);
+            cursor: pointer;
+        }
+
+        .btn-ghost:hover {
+            background: rgba(139, 92, 246, 0.1);
+            color: var(--primary-light);
+            border-color: var(--primary);
+        }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+
+        .empty-state i {
+            font-size: 3em;
+            margin-bottom: 16px;
+            opacity: 0.3;
+        }
+
+        .empty-state p {
+            font-size: 1.1em;
+        }
+
         /* Loading */
         .loading {
             text-align: center;
@@ -726,21 +873,27 @@
                         <tbody>
                             <tr>
                                 <td><i class="fas fa-server"></i> Gateway</td>
-                                <td><span class="badge badge-success">Running</span></td>
-                                <td>{{ status.version || 'N/A' }}</td>
-                                <td>Port {{ status.port || '18790' }}</td>
+                                <td><span class="badge badge-success">{{ status.gateway?.status || 'unknown' }}</span></td>
+                                <td>{{ status.gateway?.version || 'N/A' }}</td>
+                                <td>Port {{ status.gateway?.port || '18790' }} ({{ status.gateway?.bind || 'loopback' }})</td>
                             </tr>
                             <tr>
                                 <td><i class="fas fa-brain"></i> AI Model</td>
                                 <td><span class="badge badge-success">Ready</span></td>
-                                <td>{{ config?.agent?.model || 'N/A' }}</td>
+                                <td>{{ status.agent?.model || config?.agent?.model || 'N/A' }}</td>
                                 <td>{{ providers.length }} providers</td>
+                            </tr>
+                            <tr>
+                                <td><i class="fas fa-users"></i> Sessions</td>
+                                <td><span class="badge badge-info">{{ status.sessions || 0 }} active</span></td>
+                                <td>-</td>
+                                <td>Uptime: {{ status.uptime || 'N/A' }}</td>
                             </tr>
                             <tr>
                                 <td><i class="fas fa-database"></i> Storage</td>
                                 <td><span class="badge badge-success">Connected</span></td>
                                 <td>Local</td>
-                                <td>{{ config?.agent?.workspace || 'N/A' }}</td>
+                                <td>{{ status.agent?.workspace || config?.agent?.workspace || 'N/A' }}</td>
                             </tr>
                         </tbody>
                     </table>
@@ -756,22 +909,30 @@
 
                 <div class="chat-container">
                     <div class="chat-messages" ref="chatMessages">
-                        <div v-if="messages.length === 0" class="loading">
+                        <div v-if="messages.length === 0" class="empty-state">
+                            <i class="fas fa-comments"></i>
                             <p>Start a conversation with your AI assistant</p>
                         </div>
                         <div v-for="(message, index) in messages" :key="index" class="message" :class="message.role">
                             <div class="message-avatar">
                                 {{ message.role === 'user' ? 'U' : 'AI' }}
                             </div>
-                            <div class="message-content">
-                                {{ message.content }}
+                            <div class="message-content" v-html="renderMarkdown(message.content)"></div>
+                        </div>
+                        <div v-if="sending" class="typing-indicator">
+                            <div class="typing-dots">
+                                <span></span><span></span><span></span>
                             </div>
+                            AI is thinking...
                         </div>
                     </div>
                     <div class="chat-input-container">
                         <div class="chat-input-wrapper">
-                            <input type="text" class="chat-input" v-model="chatInput" @keyup.enter="sendMessage"
-                                placeholder="Type your message..." :disabled="sending" />
+                            <textarea class="chat-textarea" v-model="chatInput"
+                                @keydown="handleChatKeydown"
+                                placeholder="Type your message... (Shift+Enter for new line)"
+                                :disabled="sending"
+                                rows="1"></textarea>
                             <button class="btn btn-primary" @click="sendMessage"
                                 :disabled="sending || !chatInput.trim()">
                                 <i class="fas fa-paper-plane"></i>
@@ -817,21 +978,21 @@
                 </div>
 
                 <div class="cards-grid">
-                    <div class="card" v-for="channel in channels" :key="channel.id">
+                    <div class="card" v-for="channel in channels" :key="channel.name">
                         <div class="card-header">
                             <span class="card-title">{{ channel.name }}</span>
                             <i :class="channel.icon || 'fas fa-broadcast-tower'" class="card-icon"></i>
                         </div>
                         <div class="card-value">
                             <span class="badge" :class="{
-                                'badge-success': channel.status === 'connected',
+                                'badge-success': channel.status === 'connected' || channel.status === 'configured',
                                 'badge-warning': channel.status === 'connecting',
                                 'badge-error': channel.status === 'disconnected'
                             }">
                                 {{ channel.status || 'Unknown' }}
                             </span>
                         </div>
-                        <div class="card-label">{{ channel.description || 'No description' }}</div>
+                        <div class="card-label">{{ channel.name }} messaging channel</div>
                     </div>
                 </div>
             </div>
@@ -866,29 +1027,39 @@
             <!-- 会话 View -->
             <div v-if="currentView === 'sessions'">
                 <div class="header">
-                    <h2>会话</h2>
+                    <h2>Sessions</h2>
                 </div>
                 <div class="table-container">
                     <table>
                         <thead>
                             <tr>
-                                <th>会话 ID</th>
-                                <th>频道</th>
-                                <th>用户</th>
-                                <th>消息数</th>
-                                <th>最后活动</th>
+                                <th>Session Key</th>
+                                <th>Channel</th>
+                                <th>Model</th>
+                                <th>Messages</th>
+                                <th>Last Activity</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
                             <tr v-if="sessions.length === 0">
-                                <td colspan="5" style="text-align: center; color: var(--text-muted);">暂无会话</td>
+                                <td colspan="6" style="text-align: center; color: var(--text-muted);">No active sessions</td>
                             </tr>
-                            <tr v-for="session in sessions" :key="session.id">
-                                <td><code>{{ session.id }}</code></td>
+                            <tr v-for="session in sessions" :key="session.key">
+                                <td>
+                                    <code style="cursor: pointer;" @click="currentSession = session.key; currentView = 'chat'">
+                                        {{ session.key }}
+                                    </code>
+                                </td>
                                 <td>{{ session.channel }}</td>
-                                <td>{{ session.user }}</td>
-                                <td>{{ session.messageCount }}</td>
-                                <td>{{ session.lastActivity }}</td>
+                                <td><code>{{ session.model || 'default' }}</code></td>
+                                <td>{{ session.messageCount || 0 }}</td>
+                                <td>{{ formatTimestamp(session.lastActivityAt) }}</td>
+                                <td>
+                                    <button class="btn btn-sm btn-danger" @click="deleteSession(session.key)">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                </td>
                             </tr>
                         </tbody>
                     </table>
@@ -925,42 +1096,33 @@
                 </div>
             </div>
 
-            <!-- 技能 View -->
+            <!-- Skills View -->
             <div v-if="currentView === 'skills'">
                 <div class="header">
-                    <h2>技能</h2>
+                    <h2>Skills</h2>
+                    <div v-if="skillsSummary" style="display: flex; gap: 12px;">
+                        <span class="badge badge-success" v-if="skillsSummary.eligible">{{ skillsSummary.eligible }} Ready</span>
+                        <span class="badge badge-warning" v-if="skillsSummary.missing_deps">{{ skillsSummary.missing_deps }} Missing Deps</span>
+                        <span class="badge badge-error" v-if="skillsSummary.disabled">{{ skillsSummary.disabled }} Disabled</span>
+                    </div>
                 </div>
-                <div class="cards-grid">
-                    <div class="card">
+                <div class="cards-grid" v-if="skills.length > 0">
+                    <div class="card" v-for="skill in skills" :key="skill.id">
                         <div class="card-header">
-                            <span class="card-title">代码执行</span>
-                            <i class="fas fa-code card-icon"></i>
+                            <span class="card-title">{{ skill.name }}</span>
+                            <i :class="skill.icon || 'fas fa-magic'" class="card-icon"></i>
                         </div>
                         <div class="card-value">
-                            <span class="badge badge-success">已启用</span>
+                            <span class="badge" :class="skillStatusBadge(skill.status)">
+                                {{ skillStatusText(skill.status) }}
+                            </span>
                         </div>
-                        <div class="card-label">执行 Python、JavaScript 等代码</div>
+                        <div class="card-label">{{ skill.category || 'general' }}</div>
                     </div>
-                    <div class="card">
-                        <div class="card-header">
-                            <span class="card-title">文件操作</span>
-                            <i class="fas fa-folder card-icon"></i>
-                        </div>
-                        <div class="card-value">
-                            <span class="badge badge-success">已启用</span>
-                        </div>
-                        <div class="card-label">读写文件、管理目录</div>
-                    </div>
-                    <div class="card">
-                        <div class="card-header">
-                            <span class="card-title">网络请求</span>
-                            <i class="fas fa-globe card-icon"></i>
-                        </div>
-                        <div class="card-value">
-                            <span class="badge badge-success">已启用</span>
-                        </div>
-                        <div class="card-label">HTTP 请求、API 调用</div>
-                    </div>
+                </div>
+                <div v-else class="empty-state">
+                    <i class="fas fa-magic"></i>
+                    <p>No skills discovered</p>
                 </div>
             </div>
 
@@ -1034,10 +1196,10 @@
                 </div>
             </div>
 
-            <!-- 调试 View -->
+            <!-- Debug View -->
             <div v-if="currentView === 'debug'">
                 <div class="header">
-                    <h2>调试</h2>
+                    <h2>Debug</h2>
                 </div>
                 <div class="cards-grid">
                     <div class="card">
@@ -1046,96 +1208,129 @@
                             <i class="fas fa-plug card-icon"></i>
                         </div>
                         <div class="card-value">
-                            <span class="badge badge-success">已连接</span>
+                            <span class="badge" :class="ws && ws.readyState === 1 ? 'badge-success' : 'badge-error'">
+                                {{ ws && ws.readyState === 1 ? 'Connected' : 'Disconnected' }}
+                            </span>
                         </div>
-                        <div class="card-label">实时通信状态</div>
+                        <div class="card-label">Real-time communication</div>
                     </div>
                     <div class="card">
                         <div class="card-header">
-                            <span class="card-title">内存使用</span>
+                            <span class="card-title">Memory</span>
                             <i class="fas fa-memory card-icon"></i>
                         </div>
-                        <div class="card-value">256 MB</div>
-                        <div class="card-label">当前内存占用</div>
+                        <div class="card-value">{{ runtimeStats ? formatMemory(runtimeStats.memoryMB) : 'N/A' }}</div>
+                        <div class="card-label">Heap allocation</div>
                     </div>
                     <div class="card">
                         <div class="card-header">
-                            <span class="card-title">请求数</span>
-                            <i class="fas fa-chart-line card-icon"></i>
+                            <span class="card-title">Goroutines</span>
+                            <i class="fas fa-layer-group card-icon"></i>
                         </div>
-                        <div class="card-value">1,234</div>
-                        <div class="card-label">总请求次数</div>
+                        <div class="card-value">{{ runtimeStats?.goroutines || 0 }}</div>
+                        <div class="card-label">Active goroutines</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">Uptime</span>
+                            <i class="fas fa-clock card-icon"></i>
+                        </div>
+                        <div class="card-value">{{ runtimeStats?.uptime || '0s' }}</div>
+                        <div class="card-label">Server uptime</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">GC Cycles</span>
+                            <i class="fas fa-recycle card-icon"></i>
+                        </div>
+                        <div class="card-value">{{ runtimeStats?.gcCycles || 0 }}</div>
+                        <div class="card-label">Garbage collection runs</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">System Memory</span>
+                            <i class="fas fa-server card-icon"></i>
+                        </div>
+                        <div class="card-value">{{ runtimeStats ? formatMemory(runtimeStats.sysMB) : 'N/A' }}</div>
+                        <div class="card-label">OS memory obtained</div>
                     </div>
                 </div>
             </div>
 
-            <!-- 日志 View -->
+            <!-- Logs View -->
             <div v-if="currentView === 'logs'">
                 <div class="header">
-                    <h2>日志</h2>
+                    <h2>Logs</h2>
+                    <button class="btn btn-sm btn-ghost" @click="fetchLogs">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
                 </div>
                 <div class="table-container">
                     <table>
                         <thead>
                             <tr>
-                                <th>时间</th>
-                                <th>级别</th>
-                                <th>消息</th>
+                                <th>Time</th>
+                                <th>Level</th>
+                                <th>Message</th>
+                                <th>Details</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <tr>
-                                <td>{{ new Date().toLocaleString() }}</td>
-                                <td><span class="badge badge-success">INFO</span></td>
-                                <td>Gateway started successfully</td>
+                            <tr v-if="logs.length === 0">
+                                <td colspan="4" style="text-align: center; color: var(--text-muted);">No log entries</td>
                             </tr>
-                            <tr>
-                                <td>{{ new Date().toLocaleString() }}</td>
-                                <td><span class="badge badge-success">INFO</span></td>
-                                <td>WebSocket connection established</td>
+                            <tr v-for="(log, index) in logs" :key="index">
+                                <td style="white-space: nowrap;">{{ formatTimestamp(log.time) }}</td>
+                                <td><span class="badge" :class="logLevelBadge(log.level)">{{ log.level }}</span></td>
+                                <td>{{ log.message }}</td>
+                                <td style="font-size: 0.85em; color: var(--text-muted);">
+                                    <span v-for="(value, key) in log.attrs" :key="key" style="margin-right: 8px;">
+                                        {{ key }}={{ value }}
+                                    </span>
+                                </td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
             </div>
 
-            <!-- 资源 View -->
+            <!-- Resources View -->
             <div v-if="currentView === 'resources'">
                 <div class="header">
-                    <h2>资源</h2>
+                    <h2>Resources</h2>
                 </div>
                 <div class="cards-grid">
                     <div class="card">
                         <div class="card-header">
-                            <span class="card-title">CPU</span>
-                            <i class="fas fa-microchip card-icon"></i>
-                        </div>
-                        <div class="card-value">12%</div>
-                        <div class="card-label">CPU 使用率</div>
-                    </div>
-                    <div class="card">
-                        <div class="card-header">
-                            <span class="card-title">内存</span>
+                            <span class="card-title">Heap Memory</span>
                             <i class="fas fa-memory card-icon"></i>
                         </div>
-                        <div class="card-value">256 MB</div>
-                        <div class="card-label">内存占用</div>
+                        <div class="card-value">{{ runtimeStats ? formatMemory(runtimeStats.memoryMB) : 'N/A' }}</div>
+                        <div class="card-label">Current heap allocation</div>
                     </div>
                     <div class="card">
                         <div class="card-header">
-                            <span class="card-title">磁盘</span>
-                            <i class="fas fa-hdd card-icon"></i>
+                            <span class="card-title">Total Allocated</span>
+                            <i class="fas fa-chart-bar card-icon"></i>
                         </div>
-                        <div class="card-value">1.2 GB</div>
-                        <div class="card-label">磁盘使用</div>
+                        <div class="card-value">{{ runtimeStats ? formatMemory(runtimeStats.totalMB) : 'N/A' }}</div>
+                        <div class="card-label">Cumulative allocation</div>
                     </div>
                     <div class="card">
                         <div class="card-header">
-                            <span class="card-title">网络</span>
-                            <i class="fas fa-network-wired card-icon"></i>
+                            <span class="card-title">System Memory</span>
+                            <i class="fas fa-server card-icon"></i>
                         </div>
-                        <div class="card-value">128 KB/s</div>
-                        <div class="card-label">网络流量</div>
+                        <div class="card-value">{{ runtimeStats ? formatMemory(runtimeStats.sysMB) : 'N/A' }}</div>
+                        <div class="card-label">OS memory obtained</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">Goroutines</span>
+                            <i class="fas fa-layer-group card-icon"></i>
+                        </div>
+                        <div class="card-value">{{ runtimeStats?.goroutines || 0 }}</div>
+                        <div class="card-label">Active goroutines</div>
                     </div>
                 </div>
             </div>

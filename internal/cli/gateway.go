@@ -8,7 +8,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/highclaw/highclaw/internal/agent"
+	skillapp "github.com/highclaw/highclaw/internal/application/skill"
 	"github.com/highclaw/highclaw/internal/config"
+	"github.com/highclaw/highclaw/internal/gateway/session"
 	"github.com/highclaw/highclaw/internal/infra"
 	"github.com/highclaw/highclaw/internal/interfaces/http"
 	"github.com/spf13/cobra"
@@ -78,8 +81,19 @@ func runGateway(cmd *cobra.Command, args []string) error {
 		"dev", gatewayDev,
 	)
 
+	// Create agent runner, session manager, skill manager, and log buffer
+	runner := agent.NewRunner(cfg, logger)
+	sessions := session.NewManager()
+	skills := skillapp.NewManager(cfg, logger)
+	logBuffer := http.NewLogBuffer(200)
+
+	// Wrap logger with log buffer handler
+	bufHandler := http.NewLogBufferHandler(logger.Handler(), logBuffer)
+	logger = slog.New(bufHandler)
+	slog.SetDefault(logger)
+
 	// Create HTTP/Web server (which includes WebSocket gateway)
-	httpServer := http.NewServer(cfg, logger)
+	httpServer := http.NewServer(cfg, logger, runner, sessions, skills, logBuffer)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

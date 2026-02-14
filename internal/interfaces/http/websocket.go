@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -8,6 +9,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/highclaw/highclaw/internal/agent"
+	"github.com/highclaw/highclaw/internal/gateway/protocol"
 )
 
 // WSClient represents a WebSocket client.
@@ -171,18 +174,90 @@ func (c *WSClient) handlePing(msg WSMessage) {
 
 // handleChatSend handles chat messages.
 func (c *WSClient) handleChatSend(msg WSMessage) {
-	// TODO: Send to agent
+	var params struct {
+		Message string `json:"message"`
+		Session string `json:"session"`
+		Channel string `json:"channel"`
+	}
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		c.sendError(msg.ID, 400, "invalid params: "+err.Error())
+		return
+	}
+
+	if params.Message == "" {
+		c.sendError(msg.ID, 400, "message is required")
+		return
+	}
+
+	sessionKey := params.Session
+	if sessionKey == "" {
+		sessionKey = "main"
+	}
+	channel := params.Channel
+	if channel == "" {
+		channel = "websocket"
+	}
+
+	// Store user message in session
+	if c.server.sessions != nil {
+		sess := c.server.sessions.GetOrCreate(sessionKey, channel)
+		sess.AddMessage(protocol.ChatMessage{
+			Role:    "user",
+			Content: params.Message,
+			Channel: channel,
+		})
+	}
+
+	// Call agent
+	if c.server.agent == nil {
+		c.sendError(msg.ID, 503, "agent not available")
+		return
+	}
+
+	// Send typing event
+	c.sendEvent("chat.typing", map[string]any{"session": sessionKey, "typing": true})
+
+	result, err := c.server.agent.Run(context.Background(), &agent.RunRequest{
+		SessionKey: sessionKey,
+		Channel:    channel,
+		Message:    params.Message,
+	})
+	if err != nil {
+		c.server.logger.Error("agent run failed via websocket", "error", err)
+		c.sendError(msg.ID, 500, "agent error: "+err.Error())
+		return
+	}
+
+	// Store assistant response in session
+	if c.server.sessions != nil {
+		if sess, ok := c.server.sessions.Get(sessionKey); ok {
+			sess.AddMessage(protocol.ChatMessage{
+				Role:    "assistant",
+				Content: result.Reply,
+				Channel: channel,
+			})
+		}
+	}
+
+	// Send typing done event
+	c.sendEvent("chat.typing", map[string]any{"session": sessionKey, "typing": false})
+
 	c.sendResponse(msg.ID, map[string]any{
-		"response": "[Agent placeholder] Message received",
+		"response": result.Reply,
+		"usage":    result.TokensUsed,
+		"session":  sessionKey,
 	})
 }
 
 // handleSessionsList handles session list requests.
 func (c *WSClient) handleSessionsList(msg WSMessage) {
-	// TODO: Get sessions
-	c.sendResponse(msg.ID, []map[string]any{
-		{"key": "main", "channel": "cli"},
-	})
+	if c.server.sessions == nil {
+		c.sendResponse(msg.ID, map[string]any{"sessions": []any{}})
+		return
+	}
+
+	sessions := c.server.sessions.List()
+	c.sendResponse(msg.ID, map[string]any{"sessions": sessions})
 }
 
 // sendResponse sends a response message.
@@ -192,6 +267,17 @@ func (c *WSClient) sendResponse(id string, result any) {
 		Type:   "response",
 		ID:     id,
 		Result: data,
+	}
+	c.sendMessage(msg)
+}
+
+// sendEvent sends an event message to the client.
+func (c *WSClient) sendEvent(method string, data any) {
+	result, _ := json.Marshal(data)
+	msg := WSMessage{
+		Type:   "event",
+		Method: method,
+		Result: result,
 	}
 	c.sendMessage(msg)
 }
