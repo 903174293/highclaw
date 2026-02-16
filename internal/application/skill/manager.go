@@ -52,8 +52,12 @@ func (m *Manager) DiscoverSkills(ctx context.Context) ([]skill.SkillInfo, error)
 func (m *Manager) checkSkillStatus(info skill.SkillInfo) (skill.Status, string) {
 	// Check allowlist
 	if info.AllowlistOnly {
-		// TODO: Check if skill is in allowlist
-		return skill.StatusBlockedAllowlist, "not in allowlist"
+		if !contains(m.config.Agent.Sandbox.Allow, info.ID) {
+			return skill.StatusBlockedAllowlist, "not in allowlist"
+		}
+	}
+	if len(m.config.Agent.Sandbox.Deny) > 0 && contains(m.config.Agent.Sandbox.Deny, info.ID) {
+		return skill.StatusDisabled, "disabled in sandbox denylist"
 	}
 
 	// Check binary dependencies

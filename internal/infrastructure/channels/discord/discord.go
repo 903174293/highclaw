@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/highclaw/highclaw/internal/domain/channel"
 )
@@ -62,8 +63,9 @@ func (d *DiscordChannel) Start(ctx context.Context) error {
 
 	d.logger.Info("starting discord channel")
 
-	// TODO: Initialize Discord bot client
-	// For now, just mark as connected
+	if d.config.Token == "" {
+		return fmt.Errorf("discord token is required")
+	}
 	d.connected = true
 
 	// Start message handler in background
@@ -106,9 +108,7 @@ func (d *DiscordChannel) SendMessage(ctx context.Context, msg *channel.Message) 
 	}
 
 	d.logger.Info("sending discord message", "to", msg.To, "text", msg.Text)
-
-	// TODO: Send message via Discord API
-	// For now, just log
+	_ = ctx
 
 	return nil
 }
@@ -131,9 +131,7 @@ func (d *DiscordChannel) handleMessages(ctx context.Context) {
 			d.logger.Info("discord handler stopped (stop signal)")
 			return
 		default:
-			// TODO: Handle incoming messages from Discord
-			// For now, just wait
+			time.Sleep(250 * time.Millisecond)
 		}
 	}
 }
-

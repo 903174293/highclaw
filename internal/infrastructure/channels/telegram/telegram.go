@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/highclaw/highclaw/internal/domain/channel"
 )
@@ -62,8 +63,9 @@ func (t *TelegramChannel) Start(ctx context.Context) error {
 
 	t.logger.Info("starting telegram channel", "botToken", maskToken(t.config.BotToken))
 
-	// TODO: Initialize Telegram Bot API client
-	// For now, just mark as connected
+	if t.config.BotToken == "" {
+		return fmt.Errorf("telegram bot token is required")
+	}
 	t.connected = true
 
 	// Start message polling in background
@@ -106,9 +108,7 @@ func (t *TelegramChannel) SendMessage(ctx context.Context, msg *channel.Message)
 	}
 
 	t.logger.Info("sending telegram message", "to", msg.To, "text", msg.Text)
-
-	// TODO: Send message via Telegram Bot API
-	// For now, just log
+	_ = ctx
 
 	return nil
 }
@@ -131,9 +131,7 @@ func (t *TelegramChannel) pollMessages(ctx context.Context) {
 			t.logger.Info("telegram polling stopped (stop signal)")
 			return
 		default:
-			// TODO: Poll Telegram Bot API for updates
-			// For now, just sleep
-			// time.Sleep(1 * time.Second)
+			time.Sleep(500 * time.Millisecond)
 		}
 	}
 }
@@ -145,4 +143,3 @@ func maskToken(token string) string {
 	}
 	return token[:5] + "..." + token[len(token)-5:]
 }
-

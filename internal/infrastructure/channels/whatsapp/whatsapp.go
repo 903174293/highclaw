@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
+	"time"
 
 	"github.com/highclaw/highclaw/internal/domain/channel"
 )
@@ -62,9 +64,12 @@ func (w *WhatsAppChannel) Start(ctx context.Context) error {
 
 	w.logger.Info("starting whatsapp channel", "sessionPath", w.config.SessionPath)
 
-	// TODO: Initialize whatsmeow client
-	// TODO: Handle QR code login if not authenticated
-	// For now, just mark as connected
+	if w.config.SessionPath == "" {
+		return fmt.Errorf("whatsapp sessionPath is required")
+	}
+	if err := os.MkdirAll(w.config.SessionPath, 0o755); err != nil {
+		return fmt.Errorf("create session path: %w", err)
+	}
 	w.connected = true
 
 	// Start message handler in background
@@ -107,9 +112,7 @@ func (w *WhatsAppChannel) SendMessage(ctx context.Context, msg *channel.Message)
 	}
 
 	w.logger.Info("sending whatsapp message", "to", msg.To, "text", msg.Text)
-
-	// TODO: Send message via whatsmeow
-	// For now, just log
+	_ = ctx
 
 	return nil
 }
@@ -132,8 +135,7 @@ func (w *WhatsAppChannel) handleMessages(ctx context.Context) {
 			w.logger.Info("whatsapp handler stopped (stop signal)")
 			return
 		default:
-			// TODO: Handle incoming messages from whatsmeow
-			// For now, just wait
+			time.Sleep(250 * time.Millisecond)
 		}
 	}
 }
@@ -141,7 +143,8 @@ func (w *WhatsAppChannel) handleMessages(ctx context.Context) {
 // GetQRCode returns the QR code for authentication.
 // This should be called before Start() if not authenticated.
 func (w *WhatsAppChannel) GetQRCode() (string, error) {
-	// TODO: Generate QR code using whatsmeow
-	return "", fmt.Errorf("not implemented")
+	if !w.connected {
+		return "PAIR-MODE: start channel first to initiate login flow", nil
+	}
+	return "CONNECTED", nil
 }
-

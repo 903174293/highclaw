@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Config is the top-level OpenClaw configuration.
@@ -247,8 +248,8 @@ func Load() (*Config, error) {
 		return cfg, fmt.Errorf("read config: %w", err)
 	}
 
-	// Parse JSON (TODO: add JSON5 support via preprocessing).
-	if err := json.Unmarshal(data, cfg); err != nil {
+	clean := preprocessJSONLike(string(data))
+	if err := json.Unmarshal([]byte(clean), cfg); err != nil {
 		return cfg, fmt.Errorf("parse config %s: %w", configPath, err)
 	}
 
@@ -317,4 +318,47 @@ func applyEnvOverrides(cfg *Config) {
 		p.APIKey = v
 		cfg.Agent.Providers["openai"] = p
 	}
+}
+
+func preprocessJSONLike(input string) string {
+	s := input
+	for {
+		start := strings.Index(s, "/*")
+		if start < 0 {
+			break
+		}
+		end := strings.Index(s[start+2:], "*/")
+		if end < 0 {
+			s = s[:start]
+			break
+		}
+		end += start + 2
+		s = s[:start] + s[end+2:]
+	}
+
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		inString := false
+		escape := false
+		for j := 0; j < len(line)-1; j++ {
+			ch := line[j]
+			if ch == '\\' && inString {
+				escape = !escape
+				continue
+			}
+			if ch == '"' && !escape {
+				inString = !inString
+			}
+			escape = false
+			if !inString && ch == '/' && line[j+1] == '/' {
+				line = line[:j]
+				break
+			}
+		}
+		lines[i] = strings.TrimRight(line, " \t")
+	}
+	s = strings.Join(lines, "\n")
+	s = strings.ReplaceAll(s, ",}", "}")
+	s = strings.ReplaceAll(s, ",]", "]")
+	return s
 }

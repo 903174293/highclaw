@@ -1,81 +1,90 @@
 // Package skill defines pure Go skills (no Node.js dependencies).
 package skill
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os/exec"
+	"strings"
+	"time"
+)
 
 // PureGoSkillsInfo returns all skills implemented in pure Go.
 var PureGoSkillsInfo = []SkillInfo{
 	{
-		ID:          "bash",
-		Name:        "Bash",
-		Icon:        "💻",
-		Category:    "system",
-		Description: "Execute bash commands",
+		ID:           "bash",
+		Name:         "Bash",
+		Icon:         "💻",
+		Category:     "system",
+		Description:  "Execute bash commands",
 		RequiresNode: false,
 		BinaryDeps:   []string{"bash"},
 		Status:       StatusEligible,
 	},
 	{
-		ID:          "web-search",
-		Name:        "Web Search",
-		Icon:        "🔍",
-		Category:    "search",
-		Description: "Search the web using various engines",
-		RequiresNode: false,
+		ID:              "web-search",
+		Name:            "Web Search",
+		Icon:            "🔍",
+		Category:        "search",
+		Description:     "Search the web using various engines",
+		RequiresNode:    false,
 		RequiredEnvVars: []string{"SEARCH_API_KEY"}, // Optional
-		Status:       StatusEligible,
+		Status:          StatusEligible,
 	},
 	{
-		ID:          "file-read",
-		Name:        "File Read",
-		Icon:        "📄",
-		Category:    "filesystem",
-		Description: "Read files from disk",
+		ID:           "file-read",
+		Name:         "File Read",
+		Icon:         "📄",
+		Category:     "filesystem",
+		Description:  "Read files from disk",
 		RequiresNode: false,
 		Status:       StatusEligible,
 	},
 	{
-		ID:          "file-write",
-		Name:        "File Write",
-		Icon:        "✍️",
-		Category:    "filesystem",
-		Description: "Write files to disk",
+		ID:           "file-write",
+		Name:         "File Write",
+		Icon:         "✍️",
+		Category:     "filesystem",
+		Description:  "Write files to disk",
 		RequiresNode: false,
 		Status:       StatusEligible,
 	},
 	{
-		ID:          "http-request",
-		Name:        "HTTP Request",
-		Icon:        "🌐",
-		Category:    "web",
-		Description: "Make HTTP requests",
+		ID:           "http-request",
+		Name:         "HTTP Request",
+		Icon:         "🌐",
+		Category:     "web",
+		Description:  "Make HTTP requests",
 		RequiresNode: false,
 		Status:       StatusEligible,
 	},
 	{
-		ID:          "json-parse",
-		Name:        "JSON Parse",
-		Icon:        "📊",
-		Category:    "data",
-		Description: "Parse and manipulate JSON",
+		ID:           "json-parse",
+		Name:         "JSON Parse",
+		Icon:         "📊",
+		Category:     "data",
+		Description:  "Parse and manipulate JSON",
 		RequiresNode: false,
 		Status:       StatusEligible,
 	},
 	{
-		ID:          "sqlite",
-		Name:        "SQLite",
-		Icon:        "🗄️",
-		Category:    "database",
-		Description: "Query SQLite databases",
+		ID:           "sqlite",
+		Name:         "SQLite",
+		Icon:         "🗄️",
+		Category:     "database",
+		Description:  "Query SQLite databases",
 		RequiresNode: false,
 		Status:       StatusEligible,
 	},
 	{
-		ID:          "image-process",
-		Name:        "Image Processing",
-		Icon:        "🖼️",
-		Category:    "media",
-		Description: "Process images (resize, crop, etc.)",
+		ID:           "image-process",
+		Name:         "Image Processing",
+		Icon:         "🖼️",
+		Category:     "media",
+		Description:  "Process images (resize, crop, etc.)",
 		RequiresNode: false,
 		Status:       StatusEligible,
 	},
@@ -109,8 +118,20 @@ func NewBashSkill() *BashSkill {
 }
 
 func (s *BashSkill) Execute(ctx context.Context, params map[string]any) (any, error) {
-	// TODO: Implement bash execution
-	return nil, nil
+	cmdText, _ := params["command"].(string)
+	cmdText = strings.TrimSpace(cmdText)
+	if cmdText == "" {
+		return nil, fmt.Errorf("command is required")
+	}
+	execCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(execCtx, "bash", "-lc", cmdText)
+	out, err := cmd.CombinedOutput()
+	return map[string]any{
+		"command":  cmdText,
+		"output":   string(out),
+		"exitCode": exitCode(err),
+	}, nil
 }
 
 func (s *BashSkill) Schema() map[string]any {
@@ -142,8 +163,31 @@ func NewWebSearchSkill() *WebSearchSkill {
 }
 
 func (s *WebSearchSkill) Execute(ctx context.Context, params map[string]any) (any, error) {
-	// TODO: Implement web search
-	return nil, nil
+	q, _ := params["query"].(string)
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	searchURL := "https://duckduckgo.com/html/?q=" + url.QueryEscape(q)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "HighClaw/1.0")
+	resp, err := (&http.Client{Timeout: 8 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 3000))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"query":      q,
+		"statusCode": resp.StatusCode,
+		"preview":    string(body),
+	}, nil
 }
 
 func (s *WebSearchSkill) Schema() map[string]any {
@@ -166,3 +210,12 @@ func RegisterPureGoSkills(registry *Registry) {
 	// Add more skills here
 }
 
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	if e, ok := err.(*exec.ExitError); ok {
+		return e.ExitCode()
+	}
+	return -1
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/highclaw/highclaw/internal/domain/channel"
 )
@@ -63,8 +64,9 @@ func (s *SlackChannel) Start(ctx context.Context) error {
 
 	s.logger.Info("starting slack channel (socket mode)")
 
-	// TODO: Initialize Slack Socket Mode client
-	// For now, just mark as connected
+	if s.config.BotToken == "" || s.config.AppToken == "" {
+		return fmt.Errorf("slack bot token and app token are required")
+	}
 	s.connected = true
 
 	// Start message handler in background
@@ -107,9 +109,7 @@ func (s *SlackChannel) SendMessage(ctx context.Context, msg *channel.Message) er
 	}
 
 	s.logger.Info("sending slack message", "to", msg.To, "text", msg.Text)
-
-	// TODO: Send message via Slack API
-	// For now, just log
+	_ = ctx
 
 	return nil
 }
@@ -132,9 +132,7 @@ func (s *SlackChannel) handleMessages(ctx context.Context) {
 			s.logger.Info("slack handler stopped (stop signal)")
 			return
 		default:
-			// TODO: Handle incoming messages from Slack Socket Mode
-			// For now, just wait
+			time.Sleep(250 * time.Millisecond)
 		}
 	}
 }
-

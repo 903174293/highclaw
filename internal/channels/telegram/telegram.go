@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -83,9 +85,9 @@ func (c *Channel) Send(ctx context.Context, msg pluginsdk.OutgoingMessage) error
 	tgMsg := tgbotapi.NewMessage(chatID, msg.Text)
 
 	if msg.ReplyToID != "" {
-		// Parse message ID for reply
-		// Format: "telegram:chatID:messageID"
-		// TODO: Implement proper message ID parsing
+		if replyID, ok := parseReplyMessageID(msg.ReplyToID); ok {
+			tgMsg.ReplyToMessageID = replyID
+		}
 	}
 
 	_, err := c.bot.Send(tgMsg)
@@ -167,3 +169,16 @@ func parseChatID(id string) int64 {
 	return chatID
 }
 
+func parseReplyMessageID(id string) (int, bool) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return 0, false
+	}
+	parts := strings.Split(id, ":")
+	candidate := parts[len(parts)-1]
+	n, err := strconv.Atoi(candidate)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
