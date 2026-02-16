@@ -1,12 +1,49 @@
 package cli
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
 
+	"github.com/highclaw/highclaw/internal/agent"
+	skillapp "github.com/highclaw/highclaw/internal/application/skill"
 	"github.com/highclaw/highclaw/internal/config"
+	"github.com/highclaw/highclaw/internal/domain/model"
+	"github.com/highclaw/highclaw/internal/gateway/session"
 	"github.com/highclaw/highclaw/internal/tui"
 	"github.com/spf13/cobra"
+)
+
+var (
+	cronTaskID      string
+	cronTaskSpec    string
+	cronTaskCommand string
+
+	modelsShowAll bool
+
+	logTailLines  int
+	logTailFollow bool
+
+	resetYes        bool
+	resetKeepConfig bool
+	uninstallYes    bool
 )
 
 // --- Agent Command ---
@@ -22,7 +59,31 @@ var agentChatCmd = &cobra.Command{
 	Short: "Send a chat message to the agent",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Agent chat — not yet implemented")
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+
+		logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelInfo,
+		}))
+		runner := agent.NewRunner(cfg, logger)
+
+		msg := strings.TrimSpace(strings.Join(args, " "))
+		if msg == "" {
+			return fmt.Errorf("message cannot be empty")
+		}
+
+		result, err := runner.Run(context.Background(), &agent.RunRequest{
+			SessionKey: "cli",
+			Channel:    "cli",
+			Message:    msg,
+		})
+		if err != nil {
+			return fmt.Errorf("agent run: %w", err)
+		}
+
+		fmt.Println(result.Reply)
 		return nil
 	},
 }
@@ -31,8 +92,8 @@ var agentRPCCmd = &cobra.Command{
 	Use:   "rpc",
 	Short: "Start agent in RPC mode (JSON I/O)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Agent RPC mode — not yet implemented")
-		return nil
+		fmt.Println("Agent RPC mode is available via `highclaw gateway` WebSocket endpoint: /ws")
+		return runGateway(cmd, args)
 	},
 }
 
@@ -48,7 +109,30 @@ var channelsLoginCmd = &cobra.Command{
 	Short: "Login to a messaging channel",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("🦀 Channels login [%s] — not yet implemented\n", args[0])
+		ch := strings.ToLower(args[0])
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		switch ch {
+		case "telegram":
+			if cfg.Channels.Telegram.BotToken == "" {
+				return fmt.Errorf("telegram bot token is empty in config")
+			}
+		case "discord":
+			if cfg.Channels.Discord.Token == "" {
+				return fmt.Errorf("discord token is empty in config")
+			}
+		case "slack":
+			if cfg.Channels.Slack.BotToken == "" {
+				return fmt.Errorf("slack bot token is empty in config")
+			}
+		case "whatsapp":
+			fmt.Println("whatsapp uses session-based login; start gateway and complete pairing/QR flow")
+		default:
+			return fmt.Errorf("unknown channel: %s", ch)
+		}
+		fmt.Printf("channel %s configuration looks valid\n", ch)
 		return nil
 	},
 }
@@ -57,7 +141,14 @@ var channelsStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show status of all channels",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Channels status — not yet implemented")
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("telegram: %v\n", cfg.Channels.Telegram.BotToken != "")
+		fmt.Printf("discord : %v\n", cfg.Channels.Discord.Token != "")
+		fmt.Printf("slack   : %v\n", cfg.Channels.Slack.BotToken != "")
+		fmt.Printf("signal  : %v\n", cfg.Channels.Signal.Enabled)
 		return nil
 	},
 }
@@ -67,7 +158,7 @@ var channelsLogoutCmd = &cobra.Command{
 	Short: "Logout from a messaging channel",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("🦀 Channels logout [%s] — not yet implemented\n", args[0])
+		fmt.Printf("channel %s logout is stateless in current build; clear tokens from config if needed\n", args[0])
 		return nil
 	},
 }
@@ -77,7 +168,11 @@ var channelsSendCmd = &cobra.Command{
 	Short: "Send a message through a channel",
 	Args:  cobra.MinimumNArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Channels send — not yet implemented")
+		channel := args[0]
+		recipient := args[1]
+		msg := strings.Join(args[2:], " ")
+		fmt.Printf("send queued (local simulation): channel=%s recipient=%s message=%q\n", channel, recipient, msg)
+		fmt.Println("for live send, run `highclaw gateway` and use /api/chat or channel adapters")
 		return nil
 	},
 }
@@ -105,8 +200,12 @@ var configGetCmd = &cobra.Command{
 			return nil
 		}
 
-		// TODO: Implement key-based lookup
-		fmt.Printf("Config key lookup not yet implemented: %s\n", args[0])
+		val, err := lookupConfigKey(cfg, args[0])
+		if err != nil {
+			return err
+		}
+		data, _ := json.MarshalIndent(val, "", "  ")
+		fmt.Println(string(data))
 		return nil
 	},
 }
@@ -116,7 +215,17 @@ var configSetCmd = &cobra.Command{
 	Short: "Set a configuration value",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("🦀 Config set [%s]=[%s] — not yet implemented\n", args[0], args[1])
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		if err := setConfigKey(cfg, args[0], args[1]); err != nil {
+			return err
+		}
+		if err := config.Save(cfg); err != nil {
+			return err
+		}
+		fmt.Printf("updated %s\n", args[0])
 		return nil
 	},
 }
@@ -145,8 +254,19 @@ var configValidateCmd = &cobra.Command{
 	Use:   "validate",
 	Short: "Validate configuration file",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Config validate — not yet implemented")
-		return nil
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		issues := validateConfig(cfg)
+		if len(issues) == 0 {
+			fmt.Println("config valid")
+			return nil
+		}
+		for _, i := range issues {
+			fmt.Println("- " + i)
+		}
+		return fmt.Errorf("validation failed")
 	},
 }
 
@@ -157,7 +277,36 @@ var doctorCmd = &cobra.Command{
 	Short: "Run diagnostics, health checks, and migrations",
 	Long:  "Comprehensive diagnostics: config validation, auth check, gateway health, sandbox status, security audit, legacy migrations, workspace integrity.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Doctor — not yet implemented")
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		fmt.Println("doctor report:")
+		issues := validateConfig(cfg)
+		if len(issues) == 0 {
+			fmt.Println("  config: ok")
+		} else {
+			fmt.Println("  config: issues")
+			for _, it := range issues {
+				fmt.Printf("    - %s\n", it)
+			}
+		}
+		if _, err := os.Stat(cfg.Agent.Workspace); err != nil {
+			fmt.Printf("  workspace: missing (%s)\n", cfg.Agent.Workspace)
+		} else {
+			fmt.Printf("  workspace: ok (%s)\n", cfg.Agent.Workspace)
+		}
+		url := fmt.Sprintf("http://127.0.0.1:%d/api/health", cfg.Gateway.Port)
+		resp, err := http.Get(url)
+		if err != nil {
+			fmt.Printf("  gateway: unreachable (%v)\n", err)
+		} else {
+			_ = resp.Body.Close()
+			fmt.Printf("  gateway: reachable (%s)\n", resp.Status)
+		}
+		if len(issues) > 0 {
+			return fmt.Errorf("doctor found issues")
+		}
 		return nil
 	},
 }
@@ -198,7 +347,14 @@ var statusCmd = &cobra.Command{
 			fmt.Printf("   Slack: configured\n")
 		}
 
-		// TODO: Query gateway for live status
+		url := fmt.Sprintf("http://127.0.0.1:%d/api/status", cfg.Gateway.Port)
+		resp, err := http.Get(url)
+		if err != nil {
+			fmt.Printf("\n🌐 Live Gateway: unreachable (%v)\n", err)
+		} else {
+			defer resp.Body.Close()
+			fmt.Printf("\n🌐 Live Gateway: %s\n", resp.Status)
+		}
 		fmt.Printf("\n💡 Tip: Run 'highclaw gateway' to start the server\n")
 		return nil
 	},
@@ -215,7 +371,21 @@ var sessionsListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List active sessions",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Sessions list — not yet implemented")
+		sessions, err := session.LoadAll()
+		if err != nil {
+			return fmt.Errorf("load sessions: %w", err)
+		}
+		if len(sessions) == 0 {
+			fmt.Printf("no persisted sessions found (%s)\n", session.SessionsDir())
+			return nil
+		}
+		sort.Slice(sessions, func(i, j int) bool {
+			return sessions[i].LastActivityAt.After(sessions[j].LastActivityAt)
+		})
+		for _, s := range sessions {
+			fmt.Printf("%s  channel=%s messages=%d last=%s\n",
+				s.Key, s.Channel, s.MessageCount, s.LastActivityAt.Format(time.RFC3339))
+		}
 		return nil
 	},
 }
@@ -225,7 +395,12 @@ var sessionsGetCmd = &cobra.Command{
 	Short: "Get session details",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("🦀 Sessions get [%s] — not yet implemented\n", args[0])
+		s, err := session.Load(args[0])
+		if err != nil {
+			return fmt.Errorf("load session %q: %w", args[0], err)
+		}
+		data, _ := json.MarshalIndent(s, "", "  ")
+		fmt.Println(string(data))
 		return nil
 	},
 }
@@ -235,7 +410,10 @@ var sessionsDeleteCmd = &cobra.Command{
 	Short: "Delete a session",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("🦀 Sessions delete [%s] — not yet implemented\n", args[0])
+		if err := session.Delete(args[0]); err != nil {
+			return err
+		}
+		fmt.Printf("deleted session: %s\n", args[0])
 		return nil
 	},
 }
@@ -245,7 +423,15 @@ var sessionsResetCmd = &cobra.Command{
 	Short: "Reset a session's message history",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("🦀 Sessions reset [%s] — not yet implemented\n", args[0])
+		s, err := session.Load(args[0])
+		if err != nil {
+			return fmt.Errorf("load session %q: %w", args[0], err)
+		}
+		s.Reset()
+		if err := s.Save(); err != nil {
+			return fmt.Errorf("save session %q: %w", args[0], err)
+		}
+		fmt.Printf("session reset: %s\n", args[0])
 		return nil
 	},
 }
@@ -261,7 +447,21 @@ var cronListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List scheduled tasks",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Cron list — not yet implemented")
+		tasks, err := loadCronTasks()
+		if err != nil {
+			return err
+		}
+		if len(tasks) == 0 {
+			fmt.Println("no cron tasks configured")
+			return nil
+		}
+		for _, t := range tasks {
+			lastRun := "never"
+			if !t.LastRunAt.IsZero() {
+				lastRun = t.LastRunAt.Format(time.RFC3339)
+			}
+			fmt.Printf("%s  spec=%s  cmd=%q  last_run=%s\n", t.ID, t.Spec, t.Command, lastRun)
+		}
 		return nil
 	},
 }
@@ -270,7 +470,32 @@ var cronCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a scheduled task",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Cron create — not yet implemented")
+		if strings.TrimSpace(cronTaskSpec) == "" || strings.TrimSpace(cronTaskCommand) == "" {
+			return fmt.Errorf("both --spec and --command are required")
+		}
+		id := strings.TrimSpace(cronTaskID)
+		if id == "" {
+			id = fmt.Sprintf("task-%d", time.Now().Unix())
+		}
+		tasks, err := loadCronTasks()
+		if err != nil {
+			return err
+		}
+		for _, t := range tasks {
+			if t.ID == id {
+				return fmt.Errorf("task id already exists: %s", id)
+			}
+		}
+		tasks = append(tasks, cronTask{
+			ID:        id,
+			Spec:      cronTaskSpec,
+			Command:   cronTaskCommand,
+			CreatedAt: time.Now(),
+		})
+		if err := saveCronTasks(tasks); err != nil {
+			return err
+		}
+		fmt.Printf("created cron task: %s\n", id)
 		return nil
 	},
 }
@@ -280,7 +505,26 @@ var cronDeleteCmd = &cobra.Command{
 	Short: "Delete a scheduled task",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("🦀 Cron delete [%s] — not yet implemented\n", args[0])
+		tasks, err := loadCronTasks()
+		if err != nil {
+			return err
+		}
+		out := tasks[:0]
+		found := false
+		for _, t := range tasks {
+			if t.ID == args[0] {
+				found = true
+				continue
+			}
+			out = append(out, t)
+		}
+		if !found {
+			return fmt.Errorf("task not found: %s", args[0])
+		}
+		if err := saveCronTasks(out); err != nil {
+			return err
+		}
+		fmt.Printf("deleted cron task: %s\n", args[0])
 		return nil
 	},
 }
@@ -290,7 +534,31 @@ var cronTriggerCmd = &cobra.Command{
 	Short: "Manually trigger a scheduled task",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("🦀 Cron trigger [%s] — not yet implemented\n", args[0])
+		tasks, err := loadCronTasks()
+		if err != nil {
+			return err
+		}
+		var target *cronTask
+		for i := range tasks {
+			if tasks[i].ID == args[0] {
+				target = &tasks[i]
+				break
+			}
+		}
+		if target == nil {
+			return fmt.Errorf("task not found: %s", args[0])
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "bash", "-lc", target.Command).CombinedOutput()
+		target.LastRunAt = time.Now()
+		_ = saveCronTasks(tasks)
+		if len(out) > 0 {
+			fmt.Print(string(out))
+		}
+		if err != nil {
+			return fmt.Errorf("trigger task %q: %w", target.ID, err)
+		}
 		return nil
 	},
 }
@@ -306,7 +574,19 @@ var skillsListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List installed skills",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Skills list — not yet implemented")
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		mgr := skillapp.NewManager(cfg, slog.Default())
+		items, err := mgr.DiscoverSkills(context.Background())
+		if err != nil {
+			return err
+		}
+		sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+		for _, s := range items {
+			fmt.Printf("%s  %-18s  %-16s %s\n", s.Icon, s.ID, s.Status, s.Reason)
+		}
 		return nil
 	},
 }
@@ -316,7 +596,19 @@ var skillsInstallCmd = &cobra.Command{
 	Short: "Install a skill",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("🦀 Skills install [%s] — not yet implemented\n", args[0])
+		target := strings.TrimSpace(args[0])
+		if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
+			return fmt.Errorf("remote skill install is not supported in this build; use a local skill id")
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		mgr := skillapp.NewManager(cfg, slog.Default())
+		if err := mgr.InstallMissingDependencies(context.Background(), "npm", []string{target}); err != nil {
+			return err
+		}
+		fmt.Printf("skill install completed for: %s\n", target)
 		return nil
 	},
 }
@@ -326,7 +618,22 @@ var skillsUninstallCmd = &cobra.Command{
 	Short: "Uninstall a skill",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("🦀 Skills uninstall [%s] — not yet implemented\n", args[0])
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		id := strings.TrimSpace(args[0])
+		if id == "" {
+			return fmt.Errorf("skill name is required")
+		}
+		if !containsString(cfg.Agent.Sandbox.Deny, id) {
+			cfg.Agent.Sandbox.Deny = append(cfg.Agent.Sandbox.Deny, id)
+			sort.Strings(cfg.Agent.Sandbox.Deny)
+		}
+		if err := config.Save(cfg); err != nil {
+			return err
+		}
+		fmt.Printf("skill disabled via sandbox denylist: %s\n", id)
 		return nil
 	},
 }
@@ -335,7 +642,23 @@ var skillsStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show skills status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Skills status — not yet implemented")
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		mgr := skillapp.NewManager(cfg, slog.Default())
+		summary, err := mgr.GetSkillsSummary(context.Background())
+		if err != nil {
+			return err
+		}
+		keys := make([]string, 0, len(summary))
+		for k := range summary {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Printf("%s: %d\n", k, summary[k])
+		}
 		return nil
 	},
 }
@@ -351,7 +674,19 @@ var pluginsListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List installed plugins",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Plugins list — not yet implemented")
+		plugins, err := loadPluginsState()
+		if err != nil {
+			return err
+		}
+		fmt.Println("builtin: telegram, discord, slack, signal, whatsapp")
+		if len(plugins) == 0 {
+			fmt.Println("custom: (none)")
+			return nil
+		}
+		fmt.Println("custom:")
+		for _, p := range plugins {
+			fmt.Printf("- %s\n", p)
+		}
 		return nil
 	},
 }
@@ -361,7 +696,22 @@ var pluginsInstallCmd = &cobra.Command{
 	Short: "Install a plugin",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("🦀 Plugins install [%s] — not yet implemented\n", args[0])
+		plugins, err := loadPluginsState()
+		if err != nil {
+			return err
+		}
+		name := strings.TrimSpace(args[0])
+		if name == "" {
+			return fmt.Errorf("plugin name is required")
+		}
+		if !containsString(plugins, name) {
+			plugins = append(plugins, name)
+		}
+		sort.Strings(plugins)
+		if err := savePluginsState(plugins); err != nil {
+			return err
+		}
+		fmt.Printf("plugin registered: %s\n", name)
 		return nil
 	},
 }
@@ -370,7 +720,16 @@ var pluginsSyncCmd = &cobra.Command{
 	Use:   "sync",
 	Short: "Sync plugin versions",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Plugins sync — not yet implemented")
+		plugins, err := loadPluginsState()
+		if err != nil {
+			return err
+		}
+		sort.Strings(plugins)
+		plugins = uniqueStrings(plugins)
+		if err := savePluginsState(plugins); err != nil {
+			return err
+		}
+		fmt.Printf("plugins synced: %d custom entries\n", len(plugins))
 		return nil
 	},
 }
@@ -386,8 +745,7 @@ var nodesListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List connected nodes",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Nodes list — not yet implemented")
-		return nil
+		return listEntityDir("nodes")
 	},
 }
 
@@ -402,8 +760,7 @@ var devicesListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List paired devices",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Devices list — not yet implemented")
-		return nil
+		return listEntityDir("devices")
 	},
 }
 
@@ -418,7 +775,31 @@ var modelsListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List available models from all providers",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Models list — not yet implemented")
+		all := model.GetAllModelsComplete()
+		grouped := make(map[string][]model.Model)
+		for _, m := range all {
+			grouped[m.Provider] = append(grouped[m.Provider], m)
+		}
+		providers := make([]string, 0, len(grouped))
+		for p := range grouped {
+			providers = append(providers, p)
+		}
+		sort.Strings(providers)
+		for _, p := range providers {
+			ms := grouped[p]
+			sort.Slice(ms, func(i, j int) bool { return ms[i].ID < ms[j].ID })
+			fmt.Printf("%s (%d)\n", p, len(ms))
+			limit := len(ms)
+			if !modelsShowAll && limit > 5 {
+				limit = 5
+			}
+			for i := 0; i < limit; i++ {
+				fmt.Printf("  - %s\n", ms[i].ID)
+			}
+			if !modelsShowAll && len(ms) > limit {
+				fmt.Printf("  ... (%d more, use --all)\n", len(ms)-limit)
+			}
+		}
 		return nil
 	},
 }
@@ -428,7 +809,24 @@ var modelsSetCmd = &cobra.Command{
 	Short: "Set the default model",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("🦀 Models set [%s] — not yet implemented\n", args[0])
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		target := strings.TrimSpace(args[0])
+		modelID := target
+		if strings.Contains(target, "/") {
+			parts := strings.SplitN(target, "/", 2)
+			modelID = parts[1]
+		}
+		if !modelIDExists(modelID) && !modelIDExists(target) {
+			return fmt.Errorf("unknown model: %s", target)
+		}
+		cfg.Agent.Model = target
+		if err := config.Save(cfg); err != nil {
+			return err
+		}
+		fmt.Printf("default model updated: %s\n", target)
 		return nil
 	},
 }
@@ -437,7 +835,26 @@ var modelsScanCmd = &cobra.Command{
 	Use:   "scan",
 	Short: "Scan and discover available models",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Models scan — not yet implemented")
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		info := model.GetProviderInfo()
+		providers := make([]string, 0, len(info))
+		for p := range info {
+			providers = append(providers, p)
+		}
+		sort.Strings(providers)
+		for _, p := range providers {
+			meta := info[p]
+			hasEnv := meta.EnvVar != "" && strings.TrimSpace(os.Getenv(meta.EnvVar)) != ""
+			hasCfgKey := false
+			if c, ok := cfg.Agent.Providers[p]; ok {
+				hasCfgKey = strings.TrimSpace(c.APIKey) != ""
+			}
+			models := model.GetModelsByProvider(p)
+			fmt.Printf("%s  auth=%s  env=%v  cfg=%v  models=%d\n", p, meta.AuthType, hasEnv, hasCfgKey, len(models))
+		}
 		return nil
 	},
 }
@@ -453,8 +870,29 @@ var securityAuditCmd = &cobra.Command{
 	Use:   "audit",
 	Short: "Run security audit on config, files, and channels",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Security audit — not yet implemented")
-		return nil
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		var issues []string
+		issues = append(issues, validateConfig(cfg)...)
+		if cfg.Gateway.Auth.Mode == "token" && strings.TrimSpace(cfg.Gateway.Auth.Token) == "" {
+			issues = append(issues, "gateway.auth.token is empty while auth mode is token")
+		}
+		if st, err := os.Stat(config.ConfigPath()); err == nil {
+			if st.Mode().Perm()&0o077 != 0 {
+				issues = append(issues, fmt.Sprintf("config file is too permissive: %o", st.Mode().Perm()))
+			}
+		}
+		if len(issues) == 0 {
+			fmt.Println("security audit passed")
+			return nil
+		}
+		fmt.Println("security audit issues:")
+		for _, i := range issues {
+			fmt.Printf("- %s\n", i)
+		}
+		return fmt.Errorf("security audit failed with %d issue(s)", len(issues))
 	},
 }
 
@@ -462,7 +900,35 @@ var securityFixCmd = &cobra.Command{
 	Use:   "fix",
 	Short: "Auto-fix security issues found by audit",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Security fix — not yet implemented")
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		changed := false
+		if cfg.Gateway.Auth.Mode == "none" {
+			cfg.Gateway.Auth.Mode = "token"
+			changed = true
+		}
+		if cfg.Gateway.Auth.Mode == "token" && strings.TrimSpace(cfg.Gateway.Auth.Token) == "" {
+			token, err := randomHex(24)
+			if err != nil {
+				return err
+			}
+			cfg.Gateway.Auth.Token = token
+			changed = true
+		}
+		if len(cfg.Agent.Sandbox.Allow) == 0 {
+			cfg.Agent.Sandbox.Allow = []string{"bash", "read_file", "write_file", "web_search"}
+			changed = true
+		}
+		if !changed {
+			fmt.Println("no automatic security fixes were needed")
+			return nil
+		}
+		if err := config.Save(cfg); err != nil {
+			return err
+		}
+		fmt.Println("security fixes applied")
 		return nil
 	},
 }
@@ -478,7 +944,20 @@ var execApprovalsListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List pending execution approvals",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Exec-approvals list — not yet implemented")
+		items, err := loadExecApprovals()
+		if err != nil {
+			return err
+		}
+		pending := 0
+		for _, it := range items {
+			if it.Status == "pending" {
+				pending++
+				fmt.Printf("%s  requester=%s  cmd=%q  created=%s\n", it.ID, it.Requester, it.Command, it.CreatedAt.Format(time.RFC3339))
+			}
+		}
+		if pending == 0 {
+			fmt.Println("no pending approvals")
+		}
 		return nil
 	},
 }
@@ -488,8 +967,7 @@ var execApprovalsApproveCmd = &cobra.Command{
 	Short: "Approve a pending execution",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("🦀 Exec-approvals approve [%s] — not yet implemented\n", args[0])
-		return nil
+		return updateExecApproval(args[0], "approved")
 	},
 }
 
@@ -498,8 +976,7 @@ var execApprovalsDenyCmd = &cobra.Command{
 	Short: "Deny a pending execution",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("🦀 Exec-approvals deny [%s] — not yet implemented\n", args[0])
-		return nil
+		return updateExecApproval(args[0], "denied")
 	},
 }
 
@@ -514,7 +991,24 @@ var hooksListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List installed hooks",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Hooks list — not yet implemented")
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("gmail hook: account=%q model=%q\n", cfg.Hooks.Gmail.Account, cfg.Hooks.Gmail.Model)
+		fmt.Printf("internal hook enabled: %v\n", cfg.Hooks.Internal.Enabled)
+		paths, err := listHookFiles()
+		if err != nil {
+			return err
+		}
+		if len(paths) == 0 {
+			fmt.Println("custom hooks: (none)")
+			return nil
+		}
+		fmt.Println("custom hooks:")
+		for _, p := range paths {
+			fmt.Printf("- %s\n", p)
+		}
 		return nil
 	},
 }
@@ -524,7 +1018,27 @@ var hooksInstallCmd = &cobra.Command{
 	Short: "Install a hook",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("🦀 Hooks install [%s] — not yet implemented\n", args[0])
+		src := strings.TrimSpace(args[0])
+		st, err := os.Stat(src)
+		if err != nil {
+			return fmt.Errorf("stat hook: %w", err)
+		}
+		if st.IsDir() {
+			return fmt.Errorf("hook path must be a file")
+		}
+		dstDir := hooksDir()
+		if err := os.MkdirAll(dstDir, 0o755); err != nil {
+			return err
+		}
+		dst := filepath.Join(dstDir, filepath.Base(src))
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(dst, data, 0o644); err != nil {
+			return err
+		}
+		fmt.Printf("hook installed: %s\n", dst)
 		return nil
 	},
 }
@@ -533,7 +1047,15 @@ var hooksStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show hooks status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Hooks status — not yet implemented")
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		paths, _ := listHookFiles()
+		fmt.Printf("internal.enabled=%v\n", cfg.Hooks.Internal.Enabled)
+		fmt.Printf("gmail.account=%q\n", cfg.Hooks.Gmail.Account)
+		fmt.Printf("gmail.model=%q\n", cfg.Hooks.Gmail.Model)
+		fmt.Printf("custom.hooks=%d\n", len(paths))
 		return nil
 	},
 }
@@ -549,8 +1071,7 @@ var logsTailCmd = &cobra.Command{
 	Use:   "tail",
 	Short: "Stream live logs",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Logs tail — not yet implemented")
-		return nil
+		return tailLogFile(logFilePath(), logTailLines, logTailFollow)
 	},
 }
 
@@ -558,8 +1079,10 @@ var logsQueryCmd = &cobra.Command{
 	Use:   "query [pattern]",
 	Short: "Search historical logs",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Logs query — not yet implemented")
-		return nil
+		if len(args) == 0 {
+			return fmt.Errorf("pattern is required")
+		}
+		return queryLogFile(logFilePath(), strings.Join(args, " "))
 	},
 }
 
@@ -574,8 +1097,10 @@ var browserOpenCmd = &cobra.Command{
 	Use:   "open [url]",
 	Short: "Open a URL in the controlled browser",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Browser open — not yet implemented")
-		return nil
+		if len(args) != 1 {
+			return fmt.Errorf("url is required")
+		}
+		return openURL(args[0])
 	},
 }
 
@@ -583,7 +1108,20 @@ var browserInspectCmd = &cobra.Command{
 	Use:   "inspect",
 	Short: "Inspect current browser state",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Browser inspect — not yet implemented")
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("browser.enabled=%v\n", cfg.Browser.Enabled)
+		fmt.Printf("browser.color=%s\n", cfg.Browser.Color)
+		bin := "not found"
+		for _, candidate := range []string{"google-chrome", "chromium", "chrome", "safari"} {
+			if p, err := exec.LookPath(candidate); err == nil {
+				bin = p
+				break
+			}
+		}
+		fmt.Printf("browser.binary=%s\n", bin)
 		return nil
 	},
 }
@@ -600,7 +1138,20 @@ var memorySearchCmd = &cobra.Command{
 	Short: "Search memory for relevant context",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Memory search — not yet implemented")
+		query := strings.ToLower(strings.Join(args, " "))
+		records, err := loadMemoryIndex()
+		if err != nil {
+			return err
+		}
+		hits := 0
+		for _, r := range records {
+			hay := strings.ToLower(strings.Join([]string{r.SessionKey, r.Channel, r.Model}, " "))
+			if strings.Contains(hay, query) {
+				hits++
+				fmt.Printf("%s channel=%s model=%s messages=%d\n", r.SessionKey, r.Channel, r.Model, r.MessageCount)
+			}
+		}
+		fmt.Printf("matches: %d\n", hits)
 		return nil
 	},
 }
@@ -609,7 +1160,24 @@ var memorySyncCmd = &cobra.Command{
 	Use:   "sync",
 	Short: "Sync memory from session files",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Memory sync — not yet implemented")
+		sessions, err := session.LoadAll()
+		if err != nil {
+			return err
+		}
+		records := make([]memoryRecord, 0, len(sessions))
+		for _, s := range sessions {
+			records = append(records, memoryRecord{
+				SessionKey:   s.Key,
+				Channel:      s.Channel,
+				Model:        s.Model,
+				MessageCount: s.MessageCount,
+				LastActivity: s.LastActivityAt,
+			})
+		}
+		if err := saveMemoryIndex(records); err != nil {
+			return err
+		}
+		fmt.Printf("memory sync complete: %d records\n", len(records))
 		return nil
 	},
 }
@@ -618,7 +1186,12 @@ var memoryStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show memory backend status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Memory status — not yet implemented")
+		records, err := loadMemoryIndex()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("memory index: %s\n", memoryIndexPath())
+		fmt.Printf("records: %d\n", len(records))
 		return nil
 	},
 }
@@ -627,7 +1200,10 @@ var memoryResetCmd = &cobra.Command{
 	Use:   "reset",
 	Short: "Reset memory index",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Memory reset — not yet implemented")
+		if err := os.Remove(memoryIndexPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		fmt.Println("memory index reset")
 		return nil
 	},
 }
@@ -643,7 +1219,15 @@ var daemonInstallCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install HighClaw as a system daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Daemon install — not yet implemented")
+		st, err := loadDaemonState()
+		if err != nil {
+			return err
+		}
+		st.Installed = true
+		if err := saveDaemonState(st); err != nil {
+			return err
+		}
+		fmt.Printf("daemon metadata installed at %s\n", daemonStatePath())
 		return nil
 	},
 }
@@ -652,7 +1236,10 @@ var daemonUninstallCmd = &cobra.Command{
 	Use:   "uninstall",
 	Short: "Uninstall the system daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Daemon uninstall — not yet implemented")
+		if err := os.Remove(daemonStatePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		fmt.Println("daemon metadata removed")
 		return nil
 	},
 }
@@ -661,8 +1248,7 @@ var daemonStartCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start the daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Daemon start — not yet implemented")
-		return nil
+		return startDaemonProcess()
 	},
 }
 
@@ -670,8 +1256,7 @@ var daemonStopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop the daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Daemon stop — not yet implemented")
-		return nil
+		return stopDaemonProcess()
 	},
 }
 
@@ -679,7 +1264,17 @@ var daemonDaemonStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show daemon status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Daemon status — not yet implemented")
+		st, err := loadDaemonState()
+		if err != nil {
+			return err
+		}
+		running := processRunning(st.PID)
+		fmt.Printf("installed=%v\n", st.Installed)
+		fmt.Printf("pid=%d\n", st.PID)
+		fmt.Printf("running=%v\n", running)
+		if !st.StartedAt.IsZero() {
+			fmt.Printf("started_at=%s\n", st.StartedAt.Format(time.RFC3339))
+		}
 		return nil
 	},
 }
@@ -695,7 +1290,10 @@ var updateCheckCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Check for available updates",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Update check — not yet implemented")
+		fmt.Printf("current version: %s\n", version)
+		fmt.Printf("build date: %s\n", buildDate)
+		fmt.Printf("commit: %s\n", gitCommit)
+		fmt.Println("auto-update is not configured in this build")
 		return nil
 	},
 }
@@ -704,8 +1302,7 @@ var updateInstallCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install the latest update",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Update install — not yet implemented")
-		return nil
+		return fmt.Errorf("self-update is not enabled; please update the binary manually")
 	},
 }
 
@@ -725,7 +1322,16 @@ var resetCmd = &cobra.Command{
 	Use:   "reset",
 	Short: "Reset HighClaw state (configs, sessions, cache)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Reset — not yet implemented")
+		if !resetYes {
+			return fmt.Errorf("reset is destructive; rerun with --yes")
+		}
+		_ = os.RemoveAll(session.SessionsDir())
+		_ = os.RemoveAll(stateDir())
+		_ = os.RemoveAll(hooksDir())
+		if !resetKeepConfig {
+			_ = os.Remove(config.ConfigPath())
+		}
+		fmt.Println("reset complete")
 		return nil
 	},
 }
@@ -734,7 +1340,13 @@ var uninstallCmd = &cobra.Command{
 	Use:   "uninstall",
 	Short: "Uninstall HighClaw and clean up",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Uninstall — not yet implemented")
+		if !uninstallYes {
+			return fmt.Errorf("uninstall is destructive; rerun with --yes")
+		}
+		if err := os.RemoveAll(config.ConfigDir()); err != nil {
+			return err
+		}
+		fmt.Printf("removed %s\n", config.ConfigDir())
 		return nil
 	},
 }
@@ -744,8 +1356,7 @@ var messageCmd = &cobra.Command{
 	Short: "Send a single message and print the response",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Message — not yet implemented")
-		return nil
+		return agentChatCmd.RunE(cmd, args)
 	},
 }
 
@@ -753,7 +1364,13 @@ var webhooksCmd = &cobra.Command{
 	Use:   "webhooks",
 	Short: "Manage inbound/outbound webhooks",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Webhooks — not yet implemented")
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("telegram.webhookUrl=%q\n", cfg.Channels.Telegram.WebhookURL)
+		fmt.Printf("telegram.webhookSecret.set=%v\n", cfg.Channels.Telegram.WebhookSecret != "")
+		fmt.Printf("bluebubbles.webhookPath=%q\n", cfg.Channels.BlueBubbles.WebhookPath)
 		return nil
 	},
 }
@@ -762,7 +1379,20 @@ var pairingCmd = &cobra.Command{
 	Use:   "pairing",
 	Short: "Manage device pairing (QR codes, tokens)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Pairing — not yet implemented")
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+		if cfg.Gateway.Auth.Mode == "none" {
+			fmt.Println("Pairing disabled: gateway auth mode is 'none'")
+			return nil
+		}
+		if strings.TrimSpace(cfg.Gateway.Auth.Token) != "" {
+			fmt.Println("Pairing already completed: static auth token is configured")
+			return nil
+		}
+		fmt.Println("Pairing is required and no static token is configured.")
+		fmt.Println("Start gateway and call: POST /api/pair with X-Pairing-Code header.")
 		return nil
 	},
 }
@@ -771,7 +1401,17 @@ var dnsCmd = &cobra.Command{
 	Use:   "dns",
 	Short: "DNS diagnostics and configuration",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 DNS — not yet implemented")
+		hosts := []string{"api.anthropic.com", "api.openai.com", "slack.com", "discord.com", "api.telegram.org"}
+		for _, h := range hosts {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			ips, err := net.DefaultResolver.LookupHost(ctx, h)
+			cancel()
+			if err != nil {
+				fmt.Printf("%s -> error: %v\n", h, err)
+				continue
+			}
+			fmt.Printf("%s -> %s\n", h, strings.Join(ips, ", "))
+		}
 		return nil
 	},
 }
@@ -780,8 +1420,17 @@ var docsCmd = &cobra.Command{
 	Use:   "docs",
 	Short: "Open documentation in browser",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Docs — not yet implemented")
-		return nil
+		candidates := []string{
+			"https://github.com/highclaw/highclaw",
+			"https://docs.openclaw.ai",
+		}
+		for _, c := range candidates {
+			if err := openURL(c); err == nil {
+				fmt.Printf("opened docs: %s\n", c)
+				return nil
+			}
+		}
+		return fmt.Errorf("failed to open docs URL")
 	},
 }
 
@@ -789,7 +1438,15 @@ var dashboardCmd = &cobra.Command{
 	Use:   "dashboard",
 	Short: "Open the web dashboard",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🦀 Dashboard — not yet implemented")
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		url := fmt.Sprintf("http://127.0.0.1:%d", cfg.Gateway.Port)
+		if err := openURL(url); err != nil {
+			return err
+		}
+		fmt.Printf("opened dashboard: %s\n", url)
 		return nil
 	},
 }
@@ -881,4 +1538,551 @@ func init() {
 	// Update subcommands
 	updateCmd.AddCommand(updateCheckCmd)
 	updateCmd.AddCommand(updateInstallCmd)
+
+	cronCreateCmd.Flags().StringVar(&cronTaskID, "id", "", "Task ID (auto-generated when empty)")
+	cronCreateCmd.Flags().StringVar(&cronTaskSpec, "spec", "", "Cron schedule expression")
+	cronCreateCmd.Flags().StringVar(&cronTaskCommand, "command", "", "Command to execute")
+
+	modelsListCmd.Flags().BoolVar(&modelsShowAll, "all", false, "Show all models")
+
+	logsTailCmd.Flags().IntVarP(&logTailLines, "lines", "n", 200, "Number of recent lines to show")
+	logsTailCmd.Flags().BoolVarP(&logTailFollow, "follow", "f", false, "Follow log output")
+
+	resetCmd.Flags().BoolVar(&resetYes, "yes", false, "Confirm destructive reset")
+	resetCmd.Flags().BoolVar(&resetKeepConfig, "keep-config", true, "Keep config file during reset")
+	uninstallCmd.Flags().BoolVar(&uninstallYes, "yes", false, "Confirm destructive uninstall")
+}
+
+type cronTask struct {
+	ID        string    `json:"id"`
+	Spec      string    `json:"spec"`
+	Command   string    `json:"command"`
+	CreatedAt time.Time `json:"createdAt"`
+	LastRunAt time.Time `json:"lastRunAt"`
+}
+
+type execApproval struct {
+	ID        string    `json:"id"`
+	Command   string    `json:"command"`
+	Requester string    `json:"requester"`
+	Status    string    `json:"status"`
+	Reason    string    `json:"reason,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type memoryRecord struct {
+	SessionKey   string    `json:"sessionKey"`
+	Channel      string    `json:"channel"`
+	Model        string    `json:"model"`
+	MessageCount int       `json:"messageCount"`
+	LastActivity time.Time `json:"lastActivity"`
+}
+
+type daemonState struct {
+	Installed bool      `json:"installed"`
+	PID       int       `json:"pid"`
+	StartedAt time.Time `json:"startedAt"`
+}
+
+func lookupConfigKey(cfg *config.Config, key string) (any, error) {
+	switch key {
+	case "agent.model":
+		return cfg.Agent.Model, nil
+	case "agent.workspace":
+		return cfg.Agent.Workspace, nil
+	case "gateway.port":
+		return cfg.Gateway.Port, nil
+	case "gateway.bind":
+		return cfg.Gateway.Bind, nil
+	case "gateway.mode":
+		return cfg.Gateway.Mode, nil
+	case "gateway.auth.mode":
+		return cfg.Gateway.Auth.Mode, nil
+	case "gateway.auth.token":
+		return cfg.Gateway.Auth.Token, nil
+	case "channels.telegram.botToken":
+		return cfg.Channels.Telegram.BotToken, nil
+	case "channels.discord.token":
+		return cfg.Channels.Discord.Token, nil
+	case "channels.slack.botToken":
+		return cfg.Channels.Slack.BotToken, nil
+	case "channels.signal.enabled":
+		return cfg.Channels.Signal.Enabled, nil
+	case "browser.enabled":
+		return cfg.Browser.Enabled, nil
+	case "browser.color":
+		return cfg.Browser.Color, nil
+	case "hooks.internal.enabled":
+		return cfg.Hooks.Internal.Enabled, nil
+	case "hooks.gmail.account":
+		return cfg.Hooks.Gmail.Account, nil
+	case "hooks.gmail.model":
+		return cfg.Hooks.Gmail.Model, nil
+	default:
+		return nil, fmt.Errorf("unsupported config key: %s", key)
+	}
+}
+
+func setConfigKey(cfg *config.Config, key, value string) error {
+	switch key {
+	case "agent.model":
+		cfg.Agent.Model = value
+	case "agent.workspace":
+		cfg.Agent.Workspace = value
+	case "gateway.port":
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %s: %w", key, err)
+		}
+		cfg.Gateway.Port = n
+	case "gateway.bind":
+		cfg.Gateway.Bind = value
+	case "gateway.mode":
+		cfg.Gateway.Mode = value
+	case "gateway.auth.mode":
+		cfg.Gateway.Auth.Mode = value
+	case "gateway.auth.token":
+		cfg.Gateway.Auth.Token = value
+	case "channels.telegram.botToken":
+		cfg.Channels.Telegram.BotToken = value
+	case "channels.discord.token":
+		cfg.Channels.Discord.Token = value
+	case "channels.slack.botToken":
+		cfg.Channels.Slack.BotToken = value
+	case "channels.signal.enabled":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid bool for %s: %w", key, err)
+		}
+		cfg.Channels.Signal.Enabled = b
+	case "browser.enabled":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid bool for %s: %w", key, err)
+		}
+		cfg.Browser.Enabled = b
+	case "browser.color":
+		cfg.Browser.Color = value
+	case "hooks.internal.enabled":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid bool for %s: %w", key, err)
+		}
+		cfg.Hooks.Internal.Enabled = b
+	case "hooks.gmail.account":
+		cfg.Hooks.Gmail.Account = value
+	case "hooks.gmail.model":
+		cfg.Hooks.Gmail.Model = value
+	default:
+		return fmt.Errorf("unsupported config key: %s", key)
+	}
+	return nil
+}
+
+func validateConfig(cfg *config.Config) []string {
+	var issues []string
+	if strings.TrimSpace(cfg.Agent.Model) == "" {
+		issues = append(issues, "agent.model is required")
+	}
+	if strings.TrimSpace(cfg.Agent.Workspace) == "" {
+		issues = append(issues, "agent.workspace is required")
+	}
+	if cfg.Gateway.Port <= 0 || cfg.Gateway.Port > 65535 {
+		issues = append(issues, "gateway.port must be between 1 and 65535")
+	}
+	if cfg.Gateway.Bind != "" && cfg.Gateway.Bind != "loopback" && cfg.Gateway.Bind != "all" && cfg.Gateway.Bind != "tailnet" {
+		issues = append(issues, "gateway.bind must be one of: loopback, all, tailnet")
+	}
+	if cfg.Gateway.Auth.Mode != "" && cfg.Gateway.Auth.Mode != "none" && cfg.Gateway.Auth.Mode != "token" && cfg.Gateway.Auth.Mode != "password" {
+		issues = append(issues, "gateway.auth.mode must be one of: none, token, password")
+	}
+	if cfg.Gateway.Auth.Mode == "token" && strings.TrimSpace(cfg.Gateway.Auth.Token) == "" {
+		issues = append(issues, "gateway.auth.token is required when mode is token")
+	}
+	return issues
+}
+
+func stateDir() string {
+	return filepath.Join(config.ConfigDir(), "state")
+}
+
+func cronTasksPath() string {
+	return filepath.Join(stateDir(), "cron_tasks.json")
+}
+
+func pluginsPath() string {
+	return filepath.Join(stateDir(), "plugins.json")
+}
+
+func execApprovalsPath() string {
+	return filepath.Join(stateDir(), "exec_approvals.json")
+}
+
+func hooksDir() string {
+	return filepath.Join(config.ConfigDir(), "hooks")
+}
+
+func memoryIndexPath() string {
+	return filepath.Join(stateDir(), "memory_index.json")
+}
+
+func daemonStatePath() string {
+	return filepath.Join(stateDir(), "daemon.json")
+}
+
+func logFilePath() string {
+	return filepath.Join(config.ConfigDir(), "highclaw.log")
+}
+
+func ensureStateDir() error {
+	return os.MkdirAll(stateDir(), 0o755)
+}
+
+func loadCronTasks() ([]cronTask, error) {
+	var tasks []cronTask
+	if err := readJSONFile(cronTasksPath(), &tasks); err != nil {
+		return nil, err
+	}
+	return tasks, nil
+}
+
+func saveCronTasks(tasks []cronTask) error {
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].ID < tasks[j].ID })
+	return writeJSONFile(cronTasksPath(), tasks)
+}
+
+func loadPluginsState() ([]string, error) {
+	var plugins []string
+	if err := readJSONFile(pluginsPath(), &plugins); err != nil {
+		return nil, err
+	}
+	return plugins, nil
+}
+
+func savePluginsState(plugins []string) error {
+	return writeJSONFile(pluginsPath(), uniqueStrings(plugins))
+}
+
+func loadExecApprovals() ([]execApproval, error) {
+	var items []execApproval
+	if err := readJSONFile(execApprovalsPath(), &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func updateExecApproval(id, status string) error {
+	items, err := loadExecApprovals()
+	if err != nil {
+		return err
+	}
+	for i := range items {
+		if items[i].ID == id {
+			items[i].Status = status
+			items[i].UpdatedAt = time.Now()
+			if err := writeJSONFile(execApprovalsPath(), items); err != nil {
+				return err
+			}
+			fmt.Printf("%s: %s\n", status, id)
+			return nil
+		}
+	}
+	return fmt.Errorf("approval not found: %s", id)
+}
+
+func listHookFiles() ([]string, error) {
+	entries, err := os.ReadDir(hooksDir())
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		out = append(out, filepath.Join(hooksDir(), e.Name()))
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func loadMemoryIndex() ([]memoryRecord, error) {
+	var records []memoryRecord
+	if err := readJSONFile(memoryIndexPath(), &records); err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
+func saveMemoryIndex(records []memoryRecord) error {
+	sort.Slice(records, func(i, j int) bool { return records[i].SessionKey < records[j].SessionKey })
+	return writeJSONFile(memoryIndexPath(), records)
+}
+
+func loadDaemonState() (daemonState, error) {
+	var st daemonState
+	if err := readJSONFile(daemonStatePath(), &st); err != nil {
+		return daemonState{}, err
+	}
+	return st, nil
+}
+
+func saveDaemonState(st daemonState) error {
+	return writeJSONFile(daemonStatePath(), st)
+}
+
+func startDaemonProcess() error {
+	st, err := loadDaemonState()
+	if err != nil {
+		return err
+	}
+	if !st.Installed {
+		return fmt.Errorf("daemon not installed; run `highclaw daemon install` first")
+	}
+	if processRunning(st.PID) {
+		return fmt.Errorf("daemon is already running (pid=%d)", st.PID)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(config.ConfigDir(), 0o755); err != nil {
+		return err
+	}
+	logF, err := os.OpenFile(logFilePath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(exe, "gateway")
+	cmd.Stdout = logF
+	cmd.Stderr = logF
+	if err := cmd.Start(); err != nil {
+		_ = logF.Close()
+		return err
+	}
+	st.PID = cmd.Process.Pid
+	st.StartedAt = time.Now()
+	if err := saveDaemonState(st); err != nil {
+		return err
+	}
+	fmt.Printf("daemon started (pid=%d)\n", st.PID)
+	return nil
+}
+
+func stopDaemonProcess() error {
+	st, err := loadDaemonState()
+	if err != nil {
+		return err
+	}
+	if st.PID <= 0 {
+		return fmt.Errorf("no running daemon pid found")
+	}
+	p, err := os.FindProcess(st.PID)
+	if err != nil {
+		return err
+	}
+	if err := p.Signal(syscall.SIGTERM); err != nil {
+		return err
+	}
+	st.PID = 0
+	st.StartedAt = time.Time{}
+	if err := saveDaemonState(st); err != nil {
+		return err
+	}
+	fmt.Println("daemon stop requested")
+	return nil
+}
+
+func processRunning(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return p.Signal(syscall.Signal(0)) == nil
+}
+
+func tailLogFile(path string, lines int, follow bool) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	all := strings.Split(string(data), "\n")
+	if lines <= 0 {
+		lines = 200
+	}
+	start := len(all) - lines
+	if start < 0 {
+		start = 0
+	}
+	for i := start; i < len(all); i++ {
+		if all[i] == "" {
+			continue
+		}
+		fmt.Println(all[i])
+	}
+	if !follow {
+		return nil
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+		return err
+	}
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(stop)
+
+	buf := make([]byte, 4096)
+	for {
+		select {
+		case <-stop:
+			return nil
+		default:
+		}
+		n, err := f.Read(buf)
+		if n > 0 {
+			fmt.Print(string(buf[:n]))
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				time.Sleep(500 * time.Millisecond)
+				continue
+			}
+			return err
+		}
+	}
+}
+
+func queryLogFile(path, pattern string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	q := strings.ToLower(pattern)
+	matches := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(strings.ToLower(line), q) {
+			fmt.Println(line)
+			matches++
+		}
+	}
+	fmt.Printf("matches: %d\n", matches)
+	return nil
+}
+
+func openURL(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	return cmd.Start()
+}
+
+func listEntityDir(name string) error {
+	dir := filepath.Join(config.ConfigDir(), name)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Printf("no %s found (%s)\n", name, dir)
+			return nil
+		}
+		return err
+	}
+	if len(entries) == 0 {
+		fmt.Printf("no %s found (%s)\n", name, dir)
+		return nil
+	}
+	for _, e := range entries {
+		fmt.Println(e.Name())
+	}
+	return nil
+}
+
+func modelIDExists(id string) bool {
+	for _, m := range model.GetAllModelsComplete() {
+		if m.ID == id || (m.Provider+"/"+m.ID) == id {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(items []string, item string) bool {
+	for _, it := range items {
+		if it == item {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueStrings(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		if strings.TrimSpace(it) == "" {
+			continue
+		}
+		if _, ok := seen[it]; ok {
+			continue
+		}
+		seen[it] = struct{}{}
+		out = append(out, it)
+	}
+	return out
+}
+
+func randomHex(n int) (string, error) {
+	if n <= 0 {
+		return "", fmt.Errorf("invalid random length")
+	}
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func readJSONFile(path string, v any) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(data, v); err != nil {
+		return fmt.Errorf("parse %s: %w", path, err)
+	}
+	return nil
+}
+
+func writeJSONFile(path string, v any) error {
+	if err := ensureStateDir(); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
 }

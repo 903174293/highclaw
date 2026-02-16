@@ -49,8 +49,8 @@ func init() {
 	rootCmd.AddCommand(channelsCmd)
 	rootCmd.AddCommand(configCmdGroup)
 	rootCmd.AddCommand(doctorCmd)
-	rootCmd.AddCommand(onboardCompleteCmd) // New beautiful onboard
-	rootCmd.AddCommand(onboardV3Cmd)       // V3 onboard
+	rootCmd.AddCommand(onboardCmd) // Primary onboard wizard
+
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(sessionsCmd)
 	rootCmd.AddCommand(cronCmd)
