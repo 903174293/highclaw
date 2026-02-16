@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +49,20 @@ var (
 
 // handleWebSocket handles WebSocket connections.
 func (s *Server) handleWebSocket(c *gin.Context) {
+	if s.pairing != nil && s.pairing.RequireAuth() {
+		auth := strings.TrimSpace(c.GetHeader("Authorization"))
+		token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+		if token == "" {
+			token = strings.TrimSpace(c.Query("token"))
+		}
+		if !s.pairing.IsAuthenticated(token) {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "unauthorized websocket",
+			})
+			return
+		}
+	}
+
 	conn, err := s.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		s.logger.Error("websocket upgrade failed", "error", err)

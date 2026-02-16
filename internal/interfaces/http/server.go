@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -17,6 +19,7 @@ import (
 	skillapp "github.com/highclaw/highclaw/internal/application/skill"
 	"github.com/highclaw/highclaw/internal/config"
 	"github.com/highclaw/highclaw/internal/gateway/session"
+	"github.com/highclaw/highclaw/internal/security"
 )
 
 //go:embed static/*
@@ -33,6 +36,13 @@ type Server struct {
 	skills    *skillapp.Manager
 	logBuffer *LogBuffer
 	startedAt time.Time
+
+	pairing         *security.PairingGuard
+	pairRateLimiter *security.SlidingWindowLimiter
+	apiRateLimiter  *security.SlidingWindowLimiter
+
+	idempotencyMu sync.Mutex
+	idempotency   map[string]time.Time
 }
 
 // NewServer creates a new HTTP server.
@@ -58,14 +68,38 @@ func NewServer(cfg *config.Config, logger *slog.Logger, runner *agent.Runner, se
 		skills:    skills,
 		logBuffer: logBuffer,
 		startedAt: time.Now(),
+		pairing: security.NewPairingGuard(
+			cfg.Gateway.Auth.Mode != "none",
+			cfg.Gateway.Auth.Token,
+		),
+		pairRateLimiter: security.NewSlidingWindowLimiter(10, time.Minute),
+		apiRateLimiter:  security.NewSlidingWindowLimiter(120, time.Minute),
+		idempotency:     map[string]time.Time{},
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
-				return true // TODO: Implement proper origin checking
+				origin := strings.TrimSpace(r.Header.Get("Origin"))
+				if origin == "" {
+					return true
+				}
+				host := strings.TrimSpace(r.Host)
+				if host == "" {
+					return false
+				}
+				if strings.Contains(origin, "://"+host) {
+					return true
+				}
+				if strings.Contains(origin, "://127.0.0.1") || strings.Contains(origin, "://localhost") {
+					return true
+				}
+				return false
 			},
 		},
 	}
 
 	s.setupRoutes()
+	if code := s.pairing.PairingCode(); code != "" {
+		s.logger.Warn("gateway pairing required", "code", code)
+	}
 	return s
 }
 
@@ -79,33 +113,40 @@ func (s *Server) setupRoutes() {
 	api := s.router.Group("/api")
 	{
 		api.GET("/status", s.handleStatus)
-		api.GET("/config", s.handleGetConfig)
-		api.PATCH("/config", s.handlePatchConfig)
+		api.POST("/pair", s.handlePair)
+		api.GET("/pairing", s.handlePairingStatus)
 
-		// Sessions
-		api.GET("/sessions", s.handleListSessions)
-		api.GET("/sessions/:key", s.handleGetSession)
-		api.POST("/sessions", s.handleCreateSession)
-		api.DELETE("/sessions/:key", s.handleDeleteSession)
-		api.PATCH("/sessions/:key", s.handlePatchSession)
+		protected := api.Group("/")
+		protected.Use(s.authMiddleware())
+		{
+			protected.GET("/config", s.handleGetConfig)
+			protected.PATCH("/config", s.handlePatchConfig)
 
-		// Chat
-		api.POST("/chat", s.handleChat)
+			// Sessions
+			protected.GET("/sessions", s.handleListSessions)
+			protected.GET("/sessions/:key", s.handleGetSession)
+			protected.POST("/sessions", s.handleCreateSession)
+			protected.DELETE("/sessions/:key", s.handleDeleteSession)
+			protected.PATCH("/sessions/:key", s.handlePatchSession)
 
-		// Channels
-		api.GET("/channels", s.handleListChannels)
-		api.GET("/channels/status", s.handleChannelsStatus)
+			// Chat
+			protected.POST("/chat", s.handleChat)
 
-		// Models
-		api.GET("/models", s.handleListModels)
-		api.GET("/providers", s.handleListProviders)
+			// Channels
+			protected.GET("/channels", s.handleListChannels)
+			protected.GET("/channels/status", s.handleChannelsStatus)
 
-		// Skills
-		api.GET("/skills", s.handleListSkills)
+			// Models
+			protected.GET("/models", s.handleListModels)
+			protected.GET("/providers", s.handleListProviders)
 
-		// Runtime & Logs
-		api.GET("/runtime/stats", s.handleRuntimeStats)
-		api.GET("/logs", s.handleLogs)
+			// Skills
+			protected.GET("/skills", s.handleListSkills)
+
+			// Runtime & Logs
+			protected.GET("/runtime/stats", s.handleRuntimeStats)
+			protected.GET("/logs", s.handleLogs)
+		}
 	}
 
 	// WebSocket
@@ -199,9 +240,37 @@ func (s *Server) getListenAddr() string {
 	case "all":
 		return fmt.Sprintf("0.0.0.0:%d", port)
 	case "tailnet":
-		// TODO: Get Tailscale IP
+		if ip := findTailnetIP(); ip != "" {
+			return fmt.Sprintf("%s:%d", ip, port)
+		}
 		return fmt.Sprintf("0.0.0.0:%d", port)
 	default:
 		return fmt.Sprintf("127.0.0.1:%d", port)
 	}
+}
+
+func findTailnetIP() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, iface := range ifaces {
+		if !strings.Contains(strings.ToLower(iface.Name), "tailscale") {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ip, _, err := net.ParseCIDR(addr.String())
+			if err != nil || ip == nil || ip.IsLoopback() {
+				continue
+			}
+			if v4 := ip.To4(); v4 != nil {
+				return v4.String()
+			}
+		}
+	}
+	return ""
 }

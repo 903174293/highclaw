@@ -2,6 +2,8 @@ package http
 
 import (
 	"log/slog"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -65,3 +67,36 @@ func authMiddleware(token string) gin.HandlerFunc {
 	}
 }
 
+// authMiddleware enforces gateway bearer authentication when pairing/token mode is enabled.
+func (s *Server) authMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.pairing == nil || !s.pairing.RequireAuth() {
+			c.Next()
+			return
+		}
+
+		clientKey := c.ClientIP()
+		if clientKey == "" {
+			clientKey = "unknown"
+		}
+		if s.apiRateLimiter != nil && !s.apiRateLimiter.Allow(clientKey) {
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error": "rate limit exceeded",
+			})
+			c.Abort()
+			return
+		}
+
+		authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
+		token := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+		if !s.pairing.IsAuthenticated(token) {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "unauthorized (pair first via POST /api/pair)",
+			})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}

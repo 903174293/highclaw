@@ -1,354 +1,313 @@
-// HighClaw Web UI - Vue 3 Application
-const { createApp } = Vue;
+// HighClaw Control Dashboard
 
-createApp({
-    data() {
-        return {
-            currentView: 'chat',
-            currentSession: 'main',
-            loading: false,
-            status: null,
-            models: [],
-            providers: [],
-            channels: [],
-            config: null,
-            messages: [],
-            chatInput: '',
-            sending: false,
-            ws: null,
-            sessions: [],
-            skills: [],
-            skillsSummary: null,
-            nodes: [],
-            cronJobs: [],
-            logs: [],
-            runtimeStats: null,
-        };
+let currentTab = 'chat';
+let currentSession = 'main';
+let agentModel = '';
+let uptimeInterval;
+
+const api = {
+    async get(endpoint) {
+        try {
+            const res = await fetch(`/api${endpoint}`);
+            if (!res.ok) throw new Error(`API Error: ${res.status}`);
+            return await res.json();
+        } catch (e) {
+            console.error(e);
+            return null;
+        }
     },
-
-    computed: {
-        isOnline() {
-            return this.status && this.status.gateway && this.status.gateway.status === 'running';
-        },
-
-        modelCount() {
-            return this.models.length;
-        },
-
-        providerCount() {
-            return this.providers.length;
-        },
-
-        channelCount() {
-            return this.channels.filter(c => c.status === 'configured' || c.status === 'connected').length;
-        },
-    },
-
-    methods: {
-        async loadSessionMessages(sessionKey) {
-            try {
-                const response = await axios.get(`/api/sessions/${sessionKey}`);
-                if (response.data && response.data.messages) {
-                    this.messages = response.data.messages.map(msg => ({
-                        role: msg.role,
-                        content: msg.content,
-                        timestamp: msg.timestamp || new Date().toISOString(),
-                    }));
-                }
-            } catch (error) {
-                // Session may not exist yet, that's ok
-                console.debug('No existing session messages:', error.message);
-            }
-        },
-
-        async fetchStatus() {
-            try {
-                const response = await axios.get('/api/status');
-                this.status = response.data;
-            } catch (error) {
-                console.error('Failed to fetch status:', error);
-            }
-        },
-
-        async fetchModels() {
-            try {
-                const response = await axios.get('/api/models');
-                this.models = response.data.models || [];
-            } catch (error) {
-                console.error('Failed to fetch models:', error);
-            }
-        },
-
-        async fetchProviders() {
-            try {
-                const response = await axios.get('/api/providers');
-                this.providers = response.data.providers || [];
-            } catch (error) {
-                console.error('Failed to fetch providers:', error);
-            }
-        },
-
-        async fetchChannels() {
-            try {
-                const response = await axios.get('/api/channels/status');
-                this.channels = response.data.channels || [];
-            } catch (error) {
-                console.error('Failed to fetch channels:', error);
-            }
-        },
-
-        async fetchConfig() {
-            try {
-                const response = await axios.get('/api/config');
-                this.config = response.data;
-            } catch (error) {
-                console.error('Failed to fetch config:', error);
-            }
-        },
-
-        async fetchSessions() {
-            try {
-                const response = await axios.get('/api/sessions');
-                this.sessions = response.data.sessions || [];
-            } catch (error) {
-                console.error('Failed to fetch sessions:', error);
-            }
-        },
-
-        async fetchSkills() {
-            try {
-                const response = await axios.get('/api/skills');
-                this.skills = response.data.skills || [];
-                this.skillsSummary = response.data.summary || {};
-            } catch (error) {
-                console.error('Failed to fetch skills:', error);
-            }
-        },
-
-        async fetchRuntimeStats() {
-            try {
-                const response = await axios.get('/api/runtime/stats');
-                this.runtimeStats = response.data;
-            } catch (error) {
-                console.error('Failed to fetch runtime stats:', error);
-            }
-        },
-
-        async fetchLogs() {
-            try {
-                const response = await axios.get('/api/logs');
-                this.logs = response.data.logs || [];
-            } catch (error) {
-                console.error('Failed to fetch logs:', error);
-            }
-        },
-
-        async deleteSession(key) {
-            try {
-                await axios.delete(`/api/sessions/${key}`);
-                this.fetchSessions();
-            } catch (error) {
-                console.error('Failed to delete session:', error);
-            }
-        },
-
-        async sendMessage() {
-            if (!this.chatInput.trim() || this.sending) return;
-
-            const userMessage = {
-                role: 'user',
-                content: this.chatInput,
-                timestamp: new Date().toISOString(),
-            };
-
-            this.messages.push(userMessage);
-            this.sending = true;
-            const input = this.chatInput;
-            this.chatInput = '';
-
-            try {
-                const response = await axios.post('/api/chat', {
-                    message: input,
-                    session: this.currentSession,
-                });
-
-                const assistantMessage = {
-                    role: 'assistant',
-                    content: response.data.response || 'No response',
-                    timestamp: new Date().toISOString(),
-                };
-
-                this.messages.push(assistantMessage);
-            } catch (error) {
-                console.error('Failed to send message:', error);
-                this.messages.push({
-                    role: 'assistant',
-                    content: 'Error: Failed to get response. ' + (error.response?.data?.error || error.message),
-                    timestamp: new Date().toISOString(),
-                });
-            } finally {
-                this.sending = false;
-                this.scrollToBottom();
-            }
-        },
-
-        handleChatKeydown(event) {
-            if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                this.sendMessage();
-            }
-        },
-
-        scrollToBottom() {
-            this.$nextTick(() => {
-                const container = this.$refs.chatMessages;
-                if (container) {
-                    container.scrollTop = container.scrollHeight;
-                }
+    async post(endpoint, data) {
+        try {
+            const res = await fetch(`/api${endpoint}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
             });
-        },
-
-        renderMarkdown(text) {
-            if (!text) return '';
-            if (typeof marked !== 'undefined' && marked.parse) {
-                return marked.parse(text);
-            }
-            // Fallback: basic formatting
-            return text
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/`([^`]+)`/g, '<code>$1</code>')
-                .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-                .replace(/\n/g, '<br>');
-        },
-
-        skillStatusBadge(status) {
-            switch (status) {
-                case 'eligible': return 'badge-success';
-                case 'missing_deps': return 'badge-warning';
-                case 'missing_api_key': return 'badge-warning';
-                case 'blocked_allowlist': return 'badge-error';
-                case 'disabled': return 'badge-error';
-                default: return 'badge-warning';
-            }
-        },
-
-        skillStatusText(status) {
-            switch (status) {
-                case 'eligible': return 'Ready';
-                case 'missing_deps': return 'Missing Deps';
-                case 'missing_api_key': return 'Missing API Key';
-                case 'blocked_allowlist': return 'Blocked';
-                case 'disabled': return 'Disabled';
-                default: return status;
-            }
-        },
-
-        logLevelBadge(level) {
-            switch (level) {
-                case 'DEBUG': return 'badge-info';
-                case 'INFO': return 'badge-success';
-                case 'WARN': return 'badge-warning';
-                case 'ERROR': return 'badge-error';
-                default: return 'badge-success';
-            }
-        },
-
-        connectWebSocket() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/ws`;
-
-            this.ws = new WebSocket(wsUrl);
-
-            this.ws.onopen = () => {
-                console.log('WebSocket connected');
-            };
-
-            this.ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                console.log('WebSocket message:', data);
-
-                if (data.type === 'event' && data.method === 'chat.typing') {
-                    // Could show typing indicator
-                } else if (data.type === 'status_update') {
-                    this.fetchStatus();
-                } else if (data.type === 'chat_message') {
-                    this.messages.push(data.message);
-                }
-            };
-
-            this.ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
-            };
-
-            this.ws.onclose = () => {
-                console.log('WebSocket disconnected');
-                setTimeout(() => this.connectWebSocket(), 5000);
-            };
-        },
-
-        formatTimestamp(timestamp) {
-            if (!timestamp) return '';
-            return new Date(timestamp).toLocaleString();
-        },
-
-        formatMemory(mb) {
-            if (!mb && mb !== 0) return 'N/A';
-            if (mb < 1) return (mb * 1024).toFixed(0) + ' KB';
-            return mb.toFixed(1) + ' MB';
-        },
-    },
-
-    mounted() {
-        // Parse URL parameters
-        const urlParams = new URLSearchParams(window.location.search);
-        const session = urlParams.get('session');
-        const view = urlParams.get('view');
-
-        if (session) {
-            this.currentSession = session;
+            if (!res.ok) throw new Error(`API Error: ${res.status}`);
+            return await res.json();
+        } catch (e) {
+            console.error(e);
+            return null;
         }
+    }
+};
 
-        if (view) {
-            this.currentView = view;
-        } else if (window.location.pathname.includes('/chat')) {
-            this.currentView = 'chat';
-        }
+document.addEventListener('DOMContentLoaded', async () => {
+    initTabs();
+    initChat();
+    initStatus();
+    loadConfig();
+    
+    // Auto refresh status
+    setInterval(updateStatus, 5000);
+    updateStatus();
+});
 
-        // Load session messages
-        if (this.currentSession) {
-            this.loadSessionMessages(this.currentSession);
-        }
-
-        // Initial data fetch
-        this.fetchStatus();
-        this.fetchModels();
-        this.fetchProviders();
-        this.fetchChannels();
-        this.fetchConfig();
-        this.fetchSessions();
-        this.fetchSkills();
-        this.fetchRuntimeStats();
-        this.fetchLogs();
-
-        // Connect WebSocket
-        this.connectWebSocket();
-
-        // Refresh intervals
-        setInterval(() => this.fetchStatus(), 10000);
-        setInterval(() => this.fetchRuntimeStats(), 15000);
-        setInterval(() => this.fetchLogs(), 10000);
-        setInterval(() => this.fetchSessions(), 15000);
-
-        // Update URL when view changes
-        this.$watch('currentView', (newView) => {
-            const url = new URL(window.location);
-            url.searchParams.set('view', newView);
-            if (this.currentSession && newView === 'chat') {
-                url.searchParams.set('session', this.currentSession);
-            }
-            window.history.pushState({}, '', url);
+function initTabs() {
+    const tabs = document.querySelectorAll('.nav-item');
+    tabs.forEach(tab => {
+        tab.addEventListener('click', (e) => {
+            e.preventDefault();
+            const target = tab.dataset.tab;
+            switchTab(target);
         });
-    },
-}).mount('#app');
+    });
+}
+
+function switchTab(tabId) {
+    // Nav active state
+    document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+    document.querySelector(`.nav-item[data-tab="${tabId}"]`).classList.add('active');
+
+    // View visibility
+    document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
+    
+    // Special handling per tab loading
+    if (tabId === 'sessions') loadSessions();
+    if (tabId === 'channels') loadChannels();
+    if (tabId === 'skills') loadSkills();
+    if (tabId === 'settings') loadSettings();
+
+    // Show new view
+    const view = document.getElementById(`view-${tabId}`);
+    if (view) view.classList.add('active');
+    currentTab = tabId;
+}
+
+// --- Chat Logic ---
+
+function initChat() {
+    const input = document.getElementById('chat-input');
+    const sendBtn = document.getElementById('send-btn');
+
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+
+    sendBtn.addEventListener('click', sendMessage);
+    
+    // Load history (stub)
+    loadChatHistory();
+}
+
+async function loadChatHistory() {
+    const data = await api.get(`/sessions/${currentSession}`);
+    if (data && data.messages) {
+        const container = document.getElementById('chat-messages');
+        container.innerHTML = ''; // Request clear
+        // Add welcome message back
+        if (data.messages.length === 0) {
+            addMessage('system', 'Welcome to HighClaw Control. Start a conversation with your agent.');
+        }
+        data.messages.forEach(msg => {
+            addMessage(msg.role, msg.content);
+        });
+        scrollToBottom();
+    }
+}
+
+async function sendMessage() {
+    const input = document.getElementById('chat-input');
+    const text = input.value.trim();
+    if (!text) return;
+
+    // Optimistic UI
+    addMessage('user', text);
+    input.value = '';
+    scrollToBottom();
+
+    // Send to API
+    const res = await api.post('/chat', {
+        message: text,
+        session: currentSession
+    });
+
+    if (res && res.response) {
+        addMessage('assistant', res.response);
+        
+        // Update tokens if provided
+        if (res.usage) {
+            document.getElementById('token-usage').innerText = `${res.usage} tokens used`;
+        }
+    } else {
+        addMessage('system', 'Error: Failed to get response from agent.');
+    }
+    scrollToBottom();
+}
+
+function addMessage(role, content) {
+    const container = document.getElementById('chat-messages');
+    
+    const div = document.createElement('div');
+    div.className = `message ${role}`;
+    
+    let avatarIcon = 'fas fa-user';
+    if (role === 'assistant') avatarIcon = 'fas fa-robot';
+    if (role === 'system') avatarIcon = 'fas fa-info-circle';
+
+    div.innerHTML = `
+        <div class="avatar"><i class="${avatarIcon}"></i></div>
+        <div class="content"><p>${escapeHtml(content)}</p></div>
+    `;
+    
+    container.appendChild(div);
+}
+
+function scrollToBottom() {
+    const container = document.getElementById('chat-messages');
+    container.scrollTop = container.scrollHeight;
+}
+
+// --- Status & Config ---
+
+async function updateStatus() {
+    const status = await api.get('/status');
+    if (status) {
+        if (uptimeInterval) clearInterval(uptimeInterval);
+        document.getElementById('uptime-display').innerHTML = `Uptime: ${status.uptime}`;
+        document.querySelector('.status-indicator').classList.add('online');
+        document.querySelector('.status-text').innerText = 'Gateway Active';
+    } else {
+        document.querySelector('.status-indicator').classList.remove('online');
+        document.querySelector('.status-text').innerText = 'Gateway Offline';
+    }
+}
+
+async function loadConfig() {
+    const cfg = await api.get('/config');
+    if (cfg && cfg.agent) {
+        agentModel = cfg.agent.model;
+        document.getElementById('current-model').innerText = agentModel;
+    }
+}
+
+// --- Views Loaders ---
+
+async function loadSessions() {
+    const data = await api.get('/sessions');
+    const container = document.getElementById('sessions-list');
+    container.innerHTML = '';
+    
+    if (data && data.sessions) {
+        data.sessions.forEach(s => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.innerHTML = `
+                <h3>Session: ${s.key}</h3>
+                <p>Channel: ${s.channel}</p>
+                <p>Messages: ${s.messageCount}</p>
+                <p>Last Active: ${timeAgo(s.lastActivity)}</p>
+                <button class="btn btn-primary" onclick="switchSession('${s.key}')">Open Chat</button>
+            `;
+            container.appendChild(card);
+        });
+    }
+}
+
+window.switchSession = (key) => {
+    currentSession = key;
+    document.getElementById('session-key').innerText = key;
+    switchTab('chat');
+    loadChatHistory();
+};
+
+async function loadChannels() {
+    const data = await api.get('/channels/status');
+    const container = document.getElementById('channels-list');
+    container.innerHTML = '';
+    
+    if (data && data.channels) {
+        data.channels.forEach(ch => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.innerHTML = `
+                <h3><i class="${ch.icon}"></i> ${capitalize(ch.name)}</h3>
+                <p>Status: <span class="badge" style="background:${ch.status === 'configured' ? '#238636' : '#8b949e'}">${ch.status}</span></p>
+            `;
+            container.appendChild(card);
+        });
+    }
+}
+
+async function loadSkills() {
+    const data = await api.get('/skills');
+    const container = document.getElementById('skills-list');
+    container.innerHTML = '';
+
+    if (data && data.skills) {
+        data.skills.forEach(skill => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.innerHTML = `
+                <h3>${skill.icon} ${skill.name}</h3>
+                <p>${skill.description}</p>
+            `;
+            container.appendChild(card);
+        });
+    }
+}
+
+async function loadSettings() {
+    const cfg = await api.get('/config');
+    const models = await api.get('/models');
+    
+    if (cfg) {
+        document.getElementById('setting-workspace').value = cfg.agent.workspace;
+        
+        // Populate models
+        const select = document.getElementById('setting-model');
+        select.innerHTML = '';
+        if (models && models.models) {
+            models.models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = `${m.provider}/${m.id}`;
+                opt.innerText = `${m.provider} - ${m.name}`;
+                if (opt.value === cfg.agent.model) opt.selected = true;
+                select.appendChild(opt);
+            });
+        }
+    }
+}
+
+async function saveSettings() {
+    const model = document.getElementById('setting-model').value;
+    await api.post('/config', {
+        agent: { model: model }
+    });
+    alert('Settings saved!');
+    loadConfig();
+}
+
+function initStatus() {
+    // Initial status check
+    updateStatus();
+    loadConfig();
+}
+
+// Helpers
+function escapeHtml(text) {
+    if (!text) return "";
+    return text.toString()
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function capitalize(s) {
+    return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function timeAgo(dateString) {
+    const date = new Date(dateString);
+    const seconds = Math.floor((new Date() - date) / 1000);
+    if (seconds < 60) return "just now";
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ago`;
+}

@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="body" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ff4d4d"/>
+      <stop offset="100%" stop-color="#991b1b"/>
+    </linearGradient>
+    <linearGradient id="claw" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff6b6b"/>
+      <stop offset="100%" stop-color="#cc2222"/>
+    </linearGradient>
+    <linearGradient id="goBlue" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#00D4FF"/>
+      <stop offset="100%" stop-color="#00ADD8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Left claw arm -->
+  <path d="M28 38 Q18 28 12 22 Q8 18 14 14 Q20 10 24 16 L34 30 Z" fill="url(#claw)" stroke="#991b1b" stroke-width="1"/>
+  <!-- Left claw pincer top -->
+  <path d="M12 22 Q6 16 2 18 Q-1 20 4 24 Q8 26 14 22 Z" fill="url(#claw)" stroke="#991b1b" stroke-width="0.8"/>
+  <!-- Left claw pincer bottom -->
+  <path d="M14 14 Q8 10 6 14 Q4 18 10 20 Q14 18 14 14 Z" fill="url(#claw)" stroke="#991b1b" stroke-width="0.8"/>
+
+  <!-- Right claw arm -->
+  <path d="M100 38 Q110 28 116 22 Q120 18 114 14 Q108 10 104 16 L94 30 Z" fill="url(#claw)" stroke="#991b1b" stroke-width="1"/>
+  <!-- Right claw pincer top -->
+  <path d="M116 22 Q122 16 126 18 Q129 20 124 24 Q120 26 114 22 Z" fill="url(#claw)" stroke="#991b1b" stroke-width="0.8"/>
+  <!-- Right claw pincer bottom -->
+  <path d="M114 14 Q120 10 122 14 Q124 18 118 20 Q114 18 114 14 Z" fill="url(#claw)" stroke="#991b1b" stroke-width="0.8"/>
+
+  <!-- Legs left -->
+  <path d="M32 68 Q20 72 14 78" stroke="url(#body)" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <path d="M30 80 Q18 86 12 94" stroke="url(#body)" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <path d="M32 92 Q22 100 18 108" stroke="url(#body)" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+
+  <!-- Legs right -->
+  <path d="M96 68 Q108 72 114 78" stroke="url(#body)" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <path d="M98 80 Q110 86 116 94" stroke="url(#body)" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <path d="M96 92 Q106 100 110 108" stroke="url(#body)" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+
+  <!-- Tail segments -->
+  <ellipse cx="64" cy="112" rx="16" ry="8" fill="url(#body)" opacity="0.7"/>
+  <ellipse cx="64" cy="120" rx="12" ry="6" fill="url(#body)" opacity="0.5"/>
+  <path d="M56 124 Q64 132 72 124" fill="url(#body)" opacity="0.4"/>
+
+  <!-- Main body (lobster carapace) -->
+  <ellipse cx="64" cy="70" rx="36" ry="40" fill="url(#body)"/>
+
+  <!-- Body segment lines -->
+  <path d="M30 62 Q64 58 98 62" stroke="#991b1b" stroke-width="1" fill="none" opacity="0.4"/>
+  <path d="M28 74 Q64 70 100 74" stroke="#991b1b" stroke-width="1" fill="none" opacity="0.4"/>
+  <path d="M30 86 Q64 82 98 86" stroke="#991b1b" stroke-width="1" fill="none" opacity="0.4"/>
+
+  <!-- Head shield -->
+  <ellipse cx="64" cy="44" rx="28" ry="18" fill="url(#body)"/>
+
+  <!-- Go gopher-style eyes - large, round, white with pupils -->
+  <!-- Left eye white -->
+  <circle cx="50" cy="40" r="10" fill="white" stroke="#991b1b" stroke-width="1"/>
+  <!-- Left eye pupil -->
+  <circle cx="52" cy="40" r="5" fill="#1a1a2e"/>
+  <!-- Left eye highlight -->
+  <circle cx="49" cy="37" r="2" fill="white"/>
+
+  <!-- Right eye white -->
+  <circle cx="78" cy="40" r="10" fill="white" stroke="#991b1b" stroke-width="1"/>
+  <!-- Right eye pupil -->
+  <circle cx="76" cy="40" r="5" fill="#1a1a2e"/>
+  <!-- Right eye highlight -->
+  <circle cx="79" cy="37" r="2" fill="white"/>
+
+  <!-- Antennae with Go blue tips -->
+  <path d="M48 30 Q42 14 36 8" stroke="url(#body)" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+  <circle cx="36" cy="8" r="4" fill="url(#goBlue)"/>
+
+  <path d="M80 30 Q86 14 92 8" stroke="url(#body)" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+  <circle cx="92" cy="8" r="4" fill="url(#goBlue)"/>
+
+  <!-- Go blue accent stripe on body -->
+  <path d="M38 54 Q64 48 90 54" stroke="url(#goBlue)" stroke-width="3" fill="none" opacity="0.8" stroke-linecap="round"/>
+
+  <!-- Small smile -->
+  <path d="M56 50 Q64 56 72 50" stroke="#991b1b" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+</svg>

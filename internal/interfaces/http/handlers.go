@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -39,6 +40,7 @@ func (s *Server) handleStatus(c *gin.Context) {
 			"bind":    s.cfg.Gateway.Bind,
 			"mode":    s.cfg.Gateway.Mode,
 			"version": "v2026.2.13",
+			"paired":  s.pairing != nil && s.pairing.IsPaired(),
 		},
 		"agent": gin.H{
 			"model":     s.cfg.Agent.Model,
@@ -51,6 +53,64 @@ func (s *Server) handleStatus(c *gin.Context) {
 		},
 		"sessions": sessionCount,
 		"uptime":   uptimeStr,
+	})
+}
+
+// handlePair exchanges one-time pairing code for a bearer token.
+func (s *Server) handlePair(c *gin.Context) {
+	if s.pairing == nil || !s.pairing.RequireAuth() {
+		c.JSON(http.StatusOK, gin.H{
+			"paired":  true,
+			"message": "auth disabled",
+		})
+		return
+	}
+
+	clientKey := c.ClientIP()
+	if clientKey == "" {
+		clientKey = "unknown"
+	}
+	if s.pairRateLimiter != nil && !s.pairRateLimiter.Allow(clientKey) {
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many pairing attempts"})
+		return
+	}
+
+	code := strings.TrimSpace(c.GetHeader("X-Pairing-Code"))
+	if code == "" {
+		var body struct {
+			Code string `json:"code"`
+		}
+		_ = c.BindJSON(&body)
+		code = strings.TrimSpace(body.Code)
+	}
+
+	token, ok, retryAfter := s.pairing.TryPair(code)
+	if ok {
+		c.JSON(http.StatusOK, gin.H{
+			"paired": true,
+			"token":  token,
+		})
+		return
+	}
+	if retryAfter > 0 {
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error":       "too many failed attempts",
+			"retry_after": retryAfter,
+		})
+		return
+	}
+	c.JSON(http.StatusForbidden, gin.H{"error": "invalid pairing code"})
+}
+
+func (s *Server) handlePairingStatus(c *gin.Context) {
+	code := ""
+	if s.pairing != nil {
+		code = s.pairing.PairingCode()
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"require_auth": s.pairing != nil && s.pairing.RequireAuth(),
+		"paired":       s.pairing != nil && s.pairing.IsPaired(),
+		"pairing_code": code,
 	})
 }
 
@@ -249,6 +309,16 @@ func (s *Server) handlePatchSession(c *gin.Context) {
 
 // handleChat handles chat requests.
 func (s *Server) handleChat(c *gin.Context) {
+	if key := strings.TrimSpace(c.GetHeader("X-Idempotency-Key")); key != "" {
+		if !s.recordIdempotencyKey(key) {
+			c.JSON(http.StatusOK, gin.H{
+				"status":  "duplicate",
+				"message": "request already processed",
+			})
+			return
+		}
+	}
+
 	var req struct {
 		Message string `json:"message"`
 		Session string `json:"session"`
@@ -311,6 +381,22 @@ func (s *Server) handleChat(c *gin.Context) {
 		"response": result.Reply,
 		"usage":    result.TokensUsed,
 	})
+}
+
+func (s *Server) recordIdempotencyKey(key string) bool {
+	s.idempotencyMu.Lock()
+	defer s.idempotencyMu.Unlock()
+	now := time.Now()
+	for k, t := range s.idempotency {
+		if now.Sub(t) > 5*time.Minute {
+			delete(s.idempotency, k)
+		}
+	}
+	if _, exists := s.idempotency[key]; exists {
+		return false
+	}
+	s.idempotency[key] = now
+	return true
 }
 
 // handleListChannels returns all available channels.

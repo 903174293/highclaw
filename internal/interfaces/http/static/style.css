@@ -1,0 +1,381 @@
+/* Modern Dark Theme for HighClaw Control */
+
+:root {
+  --bg-color: #0d1117;
+  --bg-secondary: #010409;
+  --sidebar-bg: #161b22;
+  --text-primary: #c9d1d9;
+  --text-secondary: #8b949e;
+  --accent-color: #00add8;
+  --accent-hover: #008cb3;
+  --border-color: #30363d;
+  --input-bg: #0d1117;
+  --success-color: #238636;
+  --error-color: #da3633;
+  --message-user-bg: #1f2428;
+  --message-assistant-bg: #0d1117;
+  --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+}
+
+#app {
+    display: flex;
+    width: 100vw;
+    height: 100vh;
+}
+
+/* Sidebar */
+.sidebar {
+    width: 260px;
+    background-color: var(--sidebar-bg);
+    border-right: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    margin-bottom: 30px;
+    padding: 0 10px;
+}
+
+.logo-icon {
+    width: 32px;
+    height: 32px;
+    margin-right: 10px;
+}
+
+.brand h1 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0;
+    color: var(--text-primary);
+}
+
+.brand-suffix {
+    color: var(--accent-color);
+    font-weight: 400;
+    margin-left: 2px;
+}
+
+.nav-menu {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.nav-item {
+    display: flex;
+    align-items: center;
+    padding: 10px 12px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    border-radius: 6px;
+    transition: background 0.2s, color 0.2s;
+    font-size: 14px;
+}
+
+.nav-item i {
+    width: 20px;
+    margin-right: 10px;
+    text-align: center;
+}
+
+.nav-item:hover, .nav-item.active {
+    background-color: rgba(255, 255, 255, 0.05); /* subtle hover */
+    color: var(--text-primary);
+}
+
+.nav-item.active {
+    color: var(--accent-color);
+    background-color: rgba(0, 173, 216, 0.1);
+}
+
+.nav-spacer {
+    flex: 1;
+}
+
+.status-panel {
+    margin-top: 20px;
+    padding: 15px;
+    background-color: rgba(0,0,0,0.2);
+    border-radius: 8px;
+    font-size: 12px;
+}
+
+.status-item {
+    display: flex;
+    align-items: center;
+    margin-bottom: 5px;
+}
+
+.status-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: var(--text-secondary);
+    margin-right: 8px;
+}
+
+.status-indicator.online {
+    background-color: var(--success-color);
+    box-shadow: 0 0 5px rgba(35, 134, 54, 0.5);
+}
+
+.status-meta {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+}
+
+/* Main Content */
+.main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background-color: var(--bg-color);
+    position: relative;
+    overflow: hidden;
+}
+
+.view {
+    display: none;
+    flex: 1;
+    flex-direction: column;
+    height: 100%;
+}
+
+.view.active {
+    display: flex;
+}
+
+/* Chat View */
+.chat-header {
+    height: 60px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    background-color: var(--bg-secondary);
+}
+
+.model-selector {
+    display: flex;
+    align-items: center;
+    font-weight: 500;
+    color: var(--text-primary);
+    gap: 8px;
+}
+
+.badge {
+    background-color: var(--border-color);
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.message {
+    display: flex;
+    gap: 15px;
+    max-width: 800px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+.message .avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 4px;
+    background-color: var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.message.user .avatar {
+    background-color: var(--sidebar-bg);
+}
+
+.message.assistant .avatar {
+    background-color: var(--accent-color);
+    color: white;
+}
+
+.message.system .avatar {
+    background-color: transparent;
+    color: var(--text-secondary);
+}
+
+.message .content {
+    flex: 1;
+    line-height: 1.6;
+    font-size: 15px;
+    white-space: pre-wrap;
+}
+
+.message p { margin: 0 0 10px; }
+.message p:last-child { margin: 0; }
+
+.chat-input-area {
+    padding: 20px;
+    border-top: 1px solid var(--border-color);
+    background-color: var(--bg-secondary);
+}
+
+.input-wrapper {
+    max-width: 800px;
+    margin: 0 auto;
+    position: relative;
+    background-color: var(--input-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 10px;
+    display: flex;
+}
+
+.input-wrapper:focus-within {
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 1px var(--accent-color);
+}
+
+textarea#chat-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 15px;
+    resize: none;
+    outline: none;
+    max-height: 200px;
+    min-height: 24px;
+}
+
+button#send-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 5px 10px;
+    transition: color 0.2s;
+    align-self: flex-end;
+}
+
+button#send-btn:hover {
+    color: var(--accent-color);
+}
+
+.input-footer {
+    max-width: 800px;
+    margin: 5px auto 0;
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-secondary);
+    padding: 0 5px;
+}
+
+/* Other Views */
+.view-header {
+    height: 60px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    background-color: var(--bg-secondary);
+}
+
+.view-header h2 {
+    font-size: 18px;
+    margin: 0;
+    font-weight: 500;
+}
+
+.content-padding {
+    padding: 20px;
+    overflow-y: auto;
+}
+
+.card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 20px;
+}
+
+.card {
+    background: var(--sidebar-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 15px;
+}
+
+.card h3 {
+    margin: 0 0 10px;
+    font-size: 16px;
+    color: var(--text-primary);
+}
+
+.settings-form {
+    max-width: 600px;
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.form-control {
+    width: 100%;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+.btn {
+    padding: 10px 20px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.btn-primary {
+    background-color: var(--accent-color);
+    color: white;
+}
+
+.btn-primary:hover {
+    background-color: var(--accent-hover);
+}

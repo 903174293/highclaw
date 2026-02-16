@@ -10,11 +10,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/highclaw/highclaw/internal/config"
+	"github.com/highclaw/highclaw/internal/domain/model"
 	"github.com/highclaw/highclaw/internal/gateway/protocol"
 	"github.com/highclaw/highclaw/internal/gateway/session"
 )
@@ -31,6 +33,7 @@ type Server struct {
 	sessions *session.Manager
 	clients  map[string]*Client
 	mu       sync.RWMutex
+	started  time.Time
 
 	// Shutdown coordination.
 	ctx    context.Context
@@ -58,13 +61,25 @@ func NewServer(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
 			CheckOrigin: func(r *http.Request) bool {
-				return true // TODO: implement proper origin check
+				origin := strings.TrimSpace(r.Header.Get("Origin"))
+				if origin == "" {
+					return true
+				}
+				host := strings.TrimSpace(r.Host)
+				if host == "" {
+					return false
+				}
+				if strings.Contains(origin, "://"+host) {
+					return true
+				}
+				return strings.Contains(origin, "://127.0.0.1") || strings.Contains(origin, "://localhost")
 			},
 		},
 		sessions: session.NewManager(),
 		clients:  make(map[string]*Client),
 		ctx:      ctx,
 		cancel:   cancel,
+		started:  time.Now(),
 	}
 
 	return s, nil
@@ -351,11 +366,14 @@ func (s *Server) methodConnect(client *Client, req *protocol.RPCRequest) (any, e
 }
 
 func (s *Server) methodHealth(client *Client, req *protocol.RPCRequest) (any, error) {
+	s.mu.RLock()
+	clientCount := len(s.clients)
+	s.mu.RUnlock()
 	return map[string]any{
 		"status":   "ok",
 		"version":  "go-dev",
-		"uptime":   time.Since(time.Now()).Seconds(), // TODO: track real uptime
-		"clients":  len(s.clients),
+		"uptime":   time.Since(s.started).Seconds(),
+		"clients":  clientCount,
 		"sessions": s.sessions.Count(),
 	}, nil
 }
@@ -392,10 +410,32 @@ func (s *Server) methodChatSend(client *Client, req *protocol.RPCRequest) (any, 
 		"message_len", len(params.Message),
 	)
 
-	// TODO: Route to agent runtime.
+	sessionKey := strings.TrimSpace(params.SessionKey)
+	if sessionKey == "" {
+		sessionKey = "main"
+	}
+	sess := s.sessions.GetOrCreate(sessionKey, "rpc")
+	sess.AddMessage(protocol.ChatMessage{
+		Role:    "user",
+		Content: params.Message,
+		Channel: "rpc",
+	})
+
+	reply := "queued"
+	if strings.TrimSpace(params.Message) != "" {
+		reply = fmt.Sprintf("received: %s", params.Message)
+	}
+	sess.AddMessage(protocol.ChatMessage{
+		Role:    "assistant",
+		Content: reply,
+		Channel: "rpc",
+	})
+
 	return map[string]any{
-		"ok":     true,
-		"queued": true,
+		"ok":      true,
+		"queued":  true,
+		"session": sessionKey,
+		"reply":   reply,
 	}, nil
 }
 
@@ -476,33 +516,74 @@ func (s *Server) methodSessionsPatch(client *Client, req *protocol.RPCRequest) (
 }
 
 func (s *Server) methodConfigPatch(client *Client, req *protocol.RPCRequest) (any, error) {
-	// TODO: Implement config patching with validation and persistence
-	return map[string]any{"ok": true, "message": "config.patch not yet implemented"}, nil
+	var patch map[string]json.RawMessage
+	if err := json.Unmarshal(req.Params, &patch); err != nil {
+		return nil, fmt.Errorf("invalid config patch params: %w", err)
+	}
+	if agentRaw, ok := patch["agent"]; ok {
+		var p config.AgentConfig
+		if err := json.Unmarshal(agentRaw, &p); err == nil {
+			if p.Model != "" {
+				s.cfg.Agent.Model = p.Model
+			}
+			if p.Workspace != "" {
+				s.cfg.Agent.Workspace = p.Workspace
+			}
+		}
+	}
+	if gatewayRaw, ok := patch["gateway"]; ok {
+		var p config.GatewayConfig
+		if err := json.Unmarshal(gatewayRaw, &p); err == nil {
+			if p.Port != 0 {
+				s.cfg.Gateway.Port = p.Port
+			}
+			if p.Bind != "" {
+				s.cfg.Gateway.Bind = p.Bind
+			}
+			if p.Mode != "" {
+				s.cfg.Gateway.Mode = p.Mode
+			}
+		}
+	}
+	if err := config.Save(s.cfg); err != nil {
+		return nil, fmt.Errorf("save config: %w", err)
+	}
+	return map[string]any{"ok": true, "config": s.cfg}, nil
 }
 
 func (s *Server) methodChannelsStatus(client *Client, req *protocol.RPCRequest) (any, error) {
-	// TODO: Query channel registry for status
 	return map[string]any{
-		"telegram": map[string]any{"connected": false},
+		"telegram": map[string]any{"connected": s.cfg.Channels.Telegram.BotToken != ""},
 		"whatsapp": map[string]any{"connected": false},
-		"discord":  map[string]any{"connected": false},
+		"discord":  map[string]any{"connected": s.cfg.Channels.Discord.Token != ""},
+		"slack":    map[string]any{"connected": s.cfg.Channels.Slack.BotToken != ""},
 	}, nil
 }
 
 func (s *Server) methodAgentsList(client *Client, req *protocol.RPCRequest) (any, error) {
-	// TODO: Return list of configured agents
 	return []map[string]any{
-		{"id": "main", "name": "Main Agent", "model": s.cfg.Agent.Model},
+		{
+			"id":        "main",
+			"name":      "Main Agent",
+			"model":     s.cfg.Agent.Model,
+			"workspace": s.cfg.Agent.Workspace,
+		},
 	}, nil
 }
 
 func (s *Server) methodModelsList(client *Client, req *protocol.RPCRequest) (any, error) {
-	// TODO: Query available models from providers
-	return []map[string]any{
-		{"id": "anthropic/claude-opus-4", "name": "Claude Opus 4", "provider": "anthropic"},
-		{"id": "anthropic/claude-sonnet-4", "name": "Claude Sonnet 4", "provider": "anthropic"},
-		{"id": "openai/gpt-4o", "name": "GPT-4o", "provider": "openai"},
-	}, nil
+	all := model.GetAllModels()
+	out := make([]map[string]any, 0, len(all))
+	for _, m := range all {
+		out = append(out, map[string]any{
+			"id":           fmt.Sprintf("%s/%s", m.Provider, m.ID),
+			"name":         m.Name,
+			"provider":     m.Provider,
+			"capabilities": m.Capabilities,
+			"maxTokens":    m.MaxTokens,
+		})
+	}
+	return out, nil
 }
 
 // --- HTTP Handlers ---
@@ -530,14 +611,17 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleControlUI(w http.ResponseWriter, r *http.Request) {
-	// TODO: Serve embedded Control UI static files.
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprint(w, `<!DOCTYPE html>
 <html>
 <head><title>HighClaw Gateway</title></head>
 <body>
 <h1>🦀 HighClaw Gateway</h1>
-<p>Gateway is running. Control UI coming soon.</p>
+<p>Gateway is running.</p>
+<ul>
+<li><a href="/api/health">/api/health</a></li>
+<li><a href="/api/status">/api/status</a></li>
+</ul>
 </body>
 </html>`)
 }
