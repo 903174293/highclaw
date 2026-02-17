@@ -27,7 +27,6 @@ __pycache__/
 # Documentation (exclude all .md except README.md)
 *.md
 !README.md
-!README.en.md
 !README.zh.md
 !**/README.md
 ui/src/ui/__screenshots__/

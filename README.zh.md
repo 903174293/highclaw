@@ -2,11 +2,11 @@
   <img src="highclaw.png" alt="HighClaw" width="360" />
 </p>
 
-<h1 align="center">HighClaw <img src="highclaw.png" alt="HighClaw" width="22" style="vertical-align:-3px;" /></h1>
+<h1 align="center">HighClaw <img src="highclaw.png" alt="HighClaw" style="height:1em;width:auto;vertical-align:-0.12em;" /></h1>
 
 <p align="center">
   <a href="./README.zh.md"><img src="https://img.shields.io/badge/中文文档-README.zh.md-0A66C2?style=for-the-badge" alt="中文文档" /></a>
-  <a href="./README.en.md"><img src="https://img.shields.io/badge/English-README.en.md-2EA043?style=for-the-badge" alt="English" /></a>
+  <a href="./README.md"><img src="https://img.shields.io/badge/English-README.md-2EA043?style=for-the-badge" alt="English" /></a>
 </p>
 
 <p align="center">
@@ -526,4 +526,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Implement a trait, submit a PR:
 
 ---
 
-**HighClaw** — Zero overhead. Zero compromise. Deploy anywhere. Swap anything. <img src="highclaw.png" alt="HighClaw" width="16" style="vertical-align:-2px;" />
+**HighClaw** — Zero overhead. Zero compromise. Deploy anywhere. Swap anything. <img src="highclaw.png" alt="HighClaw" style="height:1em;width:auto;vertical-align:-0.12em;" />
