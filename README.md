@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="highclaw.png" alt="HighClaw" width="200" />
+  <img src="highclaw.png" alt="HighClaw" width="360" />
 </p>
 
 <h1 align="center">HighClaw 🦀</h1>
