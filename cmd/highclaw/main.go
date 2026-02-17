@@ -18,7 +18,7 @@ func main() {
 	cli.SetBuildInfo(Version, BuildDate, GitCommit)
 
 	if err := cli.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "[highclaw] %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -19,9 +20,19 @@ type OpenAIClient struct {
 
 // NewOpenAIClient creates a new OpenAI API client.
 func NewOpenAIClient(apiKey string) *OpenAIClient {
+	return NewOpenAIClientWithBaseURL(apiKey, "https://api.openai.com/v1")
+}
+
+// NewOpenAIClientWithBaseURL creates a new OpenAI-compatible API client.
+func NewOpenAIClientWithBaseURL(apiKey, baseURL string) *OpenAIClient {
+	base := strings.TrimSpace(baseURL)
+	if base == "" {
+		base = "https://api.openai.com/v1"
+	}
+	base = strings.TrimRight(base, "/")
 	return &OpenAIClient{
 		APIKey:  apiKey,
-		BaseURL: "https://api.openai.com/v1",
+		BaseURL: base,
 		client: &http.Client{
 			Timeout: 120 * time.Second,
 		},
@@ -39,8 +50,9 @@ type OpenAIChatRequest struct {
 
 // OpenAIMessage represents a message in the OpenAI format.
 type OpenAIMessage struct {
-	Role    string `json:"role"` // "system", "user", "assistant"
-	Content string `json:"content"`
+	Role      string           `json:"role"` // "system", "user", "assistant"
+	Content   any              `json:"content,omitempty"`
+	ToolCalls []OpenAIToolCall `json:"tool_calls,omitempty"`
 }
 
 // OpenAIChatResponse represents the response from OpenAI Chat Completions API.
@@ -60,6 +72,18 @@ type OpenAIChoice struct {
 	FinishReason string        `json:"finish_reason"`
 }
 
+// OpenAIToolCall represents OpenAI-compatible function tool call metadata.
+type OpenAIToolCall struct {
+	Type     string         `json:"type,omitempty"`
+	Function OpenAIFunction `json:"function,omitempty"`
+}
+
+// OpenAIFunction represents a function call payload.
+type OpenAIFunction struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
 // OpenAIUsageStats tracks OpenAI token consumption.
 type OpenAIUsageStats struct {
 	PromptTokens     int `json:"prompt_tokens"`
@@ -67,10 +91,20 @@ type OpenAIUsageStats struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+// APIError represents a non-2xx provider HTTP response.
+type APIError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("API error %d: %s", e.StatusCode, e.Body)
+}
+
 // Chat sends a chat request to the OpenAI API.
 func (c *OpenAIClient) Chat(ctx context.Context, req *OpenAIChatRequest) (*OpenAIChatResponse, error) {
 	if req.MaxTokens == 0 {
-		req.MaxTokens = 4096
+		req.MaxTokens = 1200
 	}
 
 	reqBody, err := json.Marshal(req)
@@ -98,7 +132,10 @@ func (c *OpenAIClient) Chat(ctx context.Context, req *OpenAIChatRequest) (*OpenA
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, &APIError{
+			StatusCode: resp.StatusCode,
+			Body:       string(body),
+		}
 	}
 
 	var chatResp OpenAIChatResponse

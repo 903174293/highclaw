@@ -43,6 +43,14 @@ type Server struct {
 
 	idempotencyMu sync.Mutex
 	idempotency   map[string]time.Time
+
+	webSessionMu sync.RWMutex
+	webSessions  map[string]webSession
+}
+
+type webSession struct {
+	Username  string
+	ExpiresAt time.Time
 }
 
 // NewServer creates a new HTTP server.
@@ -75,6 +83,7 @@ func NewServer(cfg *config.Config, logger *slog.Logger, runner *agent.Runner, se
 		pairRateLimiter: security.NewSlidingWindowLimiter(10, time.Minute),
 		apiRateLimiter:  security.NewSlidingWindowLimiter(120, time.Minute),
 		idempotency:     map[string]time.Time{},
+		webSessions:     map[string]webSession{},
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				origin := strings.TrimSpace(r.Header.Get("Origin"))
@@ -96,6 +105,9 @@ func NewServer(cfg *config.Config, logger *slog.Logger, runner *agent.Runner, se
 		},
 	}
 
+	// Web console auth (browser-native Basic Auth dialog).
+	router.Use(s.webAuthMiddleware())
+
 	s.setupRoutes()
 	if code := s.pairing.PairingCode(); code != "" {
 		s.logger.Warn("gateway pairing required", "code", code)
@@ -112,13 +124,16 @@ func (s *Server) setupRoutes() {
 	// API routes
 	api := s.router.Group("/api")
 	{
-		api.GET("/status", s.handleStatus)
 		api.POST("/pair", s.handlePair)
 		api.GET("/pairing", s.handlePairingStatus)
+		api.POST("/auth/login", s.handleLogin)
+		api.POST("/auth/logout", s.handleLogout)
+		api.GET("/auth/me", s.handleAuthMe)
 
 		protected := api.Group("/")
 		protected.Use(s.authMiddleware())
 		{
+			protected.GET("/status", s.handleStatus)
 			protected.GET("/config", s.handleGetConfig)
 			protected.PATCH("/config", s.handlePatchConfig)
 
@@ -146,6 +161,7 @@ func (s *Server) setupRoutes() {
 			// Runtime & Logs
 			protected.GET("/runtime/stats", s.handleRuntimeStats)
 			protected.GET("/logs", s.handleLogs)
+			protected.GET("/meta", s.handleMeta)
 		}
 	}
 

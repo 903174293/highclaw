@@ -32,6 +32,8 @@ import (
 )
 
 var (
+	agentMessage string
+
 	cronTaskID      string
 	cronTaskSpec    string
 	cronTaskCommand string
@@ -44,6 +46,8 @@ var (
 	resetYes        bool
 	resetKeepConfig bool
 	uninstallYes    bool
+
+	migrateDryRun bool
 )
 
 // --- Agent Command ---
@@ -52,6 +56,12 @@ var agentCmd = &cobra.Command{
 	Use:   "agent",
 	Short: "Interact with the AI agent",
 	Long:  "Send messages to the AI agent and receive responses. Supports RPC and interactive modes.",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(agentMessage) != "" {
+			return agentChatCmd.RunE(cmd, []string{agentMessage})
+		}
+		return tui.Run()
+	},
 }
 
 var agentChatCmd = &cobra.Command{
@@ -102,6 +112,26 @@ var agentRPCCmd = &cobra.Command{
 var channelsCmd = &cobra.Command{
 	Use:   "channels",
 	Short: "Manage messaging channels (WhatsApp/Telegram/Discord/Slack/Signal...)",
+	Aliases: []string{
+		"channel",
+	},
+}
+
+var channelsDoctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "Run channel health diagnostics",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		fmt.Println("channel doctor:")
+		fmt.Printf("  telegram: %s\n", boolText(cfg.Channels.Telegram.BotToken != ""))
+		fmt.Printf("  discord : %s\n", boolText(cfg.Channels.Discord.Token != ""))
+		fmt.Printf("  slack   : %s\n", boolText(cfg.Channels.Slack.BotToken != ""))
+		fmt.Printf("  signal  : %s\n", boolText(cfg.Channels.Signal.Enabled))
+		return nil
+	},
 }
 
 var channelsLoginCmd = &cobra.Command{
@@ -1213,6 +1243,10 @@ var memoryResetCmd = &cobra.Command{
 var daemonCmd = &cobra.Command{
 	Use:   "daemon",
 	Short: "Manage system daemon (launchd/systemd/schtasks)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Align with ZeroClaw-style "highclaw daemon" as runtime entry.
+		return runGateway(cmd, args)
+	},
 }
 
 var daemonInstallCmd = &cobra.Command{
@@ -1451,6 +1485,130 @@ var dashboardCmd = &cobra.Command{
 	},
 }
 
+var serviceCmd = &cobra.Command{
+	Use:   "service",
+	Short: "Manage background service (alias of daemon)",
+}
+
+var serviceInstallCmd = &cobra.Command{
+	Use:   "install",
+	Short: "Install background service",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return daemonInstallCmd.RunE(cmd, args)
+	},
+}
+
+var serviceStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Show background service status",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return daemonDaemonStatusCmd.RunE(cmd, args)
+	},
+}
+
+var serviceStartCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start background service",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return daemonStartCmd.RunE(cmd, args)
+	},
+}
+
+var serviceStopCmd = &cobra.Command{
+	Use:   "stop",
+	Short: "Stop background service",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return daemonStopCmd.RunE(cmd, args)
+	},
+}
+
+var integrationsCmd = &cobra.Command{
+	Use:   "integrations",
+	Short: "Integration setup and diagnostics",
+}
+
+var integrationsInfoCmd = &cobra.Command{
+	Use:   "info [name]",
+	Short: "Show integration setup details",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := strings.ToLower(strings.TrimSpace(args[0]))
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		switch name {
+		case "telegram":
+			fmt.Println("Integration: Telegram")
+			fmt.Printf("  configured: %v\n", cfg.Channels.Telegram.BotToken != "")
+			fmt.Println("  required: channels.telegram.botToken")
+			fmt.Println("  check: highclaw channel doctor")
+		case "discord":
+			fmt.Println("Integration: Discord")
+			fmt.Printf("  configured: %v\n", cfg.Channels.Discord.Token != "")
+			fmt.Println("  required: channels.discord.token")
+		case "slack":
+			fmt.Println("Integration: Slack")
+			fmt.Printf("  configured: %v\n", cfg.Channels.Slack.BotToken != "")
+			fmt.Println("  required: channels.slack.botToken (+ appToken optional)")
+		default:
+			fmt.Printf("Integration: %s\n", args[0])
+			fmt.Println("  status: unknown integration in current build")
+			fmt.Println("  supported examples: Telegram, Discord, Slack")
+		}
+		return nil
+	},
+}
+
+var migrateCmd = &cobra.Command{
+	Use:   "migrate",
+	Short: "Data migration utilities",
+}
+
+var migrateOpenClawCmd = &cobra.Command{
+	Use:   "openclaw",
+	Short: "Migrate config/workspace from ~/.openclaw to ~/.highclaw",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		srcRoot := filepath.Join(home, ".openclaw")
+		dstRoot := filepath.Join(home, ".highclaw")
+		entries := []struct {
+			src string
+			dst string
+		}{
+			{src: filepath.Join(srcRoot, "config.yaml"), dst: filepath.Join(dstRoot, "config.yaml")},
+			{src: filepath.Join(srcRoot, "openclaw.json"), dst: filepath.Join(dstRoot, "config.yaml")},
+			{src: filepath.Join(srcRoot, "workspace"), dst: filepath.Join(dstRoot, "workspace")},
+		}
+
+		planned := 0
+		for _, e := range entries {
+			if _, statErr := os.Stat(e.src); statErr == nil {
+				planned++
+				fmt.Printf("%s %s -> %s\n", ternary(migrateDryRun, "plan", "migrate"), e.src, e.dst)
+				if !migrateDryRun {
+					if err := copyPath(e.src, e.dst); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if planned == 0 {
+			fmt.Printf("no legacy assets found under %s\n", srcRoot)
+			return nil
+		}
+		if migrateDryRun {
+			fmt.Printf("dry-run complete, %d item(s) ready to migrate\n", planned)
+		} else {
+			fmt.Printf("migration complete, %d item(s) migrated\n", planned)
+		}
+		return nil
+	},
+}
+
 func init() {
 	// Agent subcommands
 	agentCmd.AddCommand(agentChatCmd)
@@ -1461,6 +1619,7 @@ func init() {
 	channelsCmd.AddCommand(channelsStatusCmd)
 	channelsCmd.AddCommand(channelsLogoutCmd)
 	channelsCmd.AddCommand(channelsSendCmd)
+	channelsCmd.AddCommand(channelsDoctorCmd)
 
 	// Config subcommands
 	configCmdGroup.AddCommand(configGetCmd)
@@ -1535,6 +1694,18 @@ func init() {
 	daemonCmd.AddCommand(daemonStopCmd)
 	daemonCmd.AddCommand(daemonDaemonStatusCmd)
 
+	// Service aliases
+	serviceCmd.AddCommand(serviceInstallCmd)
+	serviceCmd.AddCommand(serviceStatusCmd)
+	serviceCmd.AddCommand(serviceStartCmd)
+	serviceCmd.AddCommand(serviceStopCmd)
+
+	// Integrations
+	integrationsCmd.AddCommand(integrationsInfoCmd)
+
+	// Migration
+	migrateCmd.AddCommand(migrateOpenClawCmd)
+
 	// Update subcommands
 	updateCmd.AddCommand(updateCheckCmd)
 	updateCmd.AddCommand(updateInstallCmd)
@@ -1542,8 +1713,10 @@ func init() {
 	cronCreateCmd.Flags().StringVar(&cronTaskID, "id", "", "Task ID (auto-generated when empty)")
 	cronCreateCmd.Flags().StringVar(&cronTaskSpec, "spec", "", "Cron schedule expression")
 	cronCreateCmd.Flags().StringVar(&cronTaskCommand, "command", "", "Command to execute")
+	agentCmd.Flags().StringVarP(&agentMessage, "message", "m", "", "Send one message and exit")
 
 	modelsListCmd.Flags().BoolVar(&modelsShowAll, "all", false, "Show all models")
+	migrateOpenClawCmd.Flags().BoolVar(&migrateDryRun, "dry-run", false, "Preview migration actions without writing")
 
 	logsTailCmd.Flags().IntVarP(&logTailLines, "lines", "n", 200, "Number of recent lines to show")
 	logsTailCmd.Flags().BoolVarP(&logTailFollow, "follow", "f", false, "Follow log output")
@@ -2085,4 +2258,56 @@ func writeJSONFile(path string, v any) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+func boolText(ok bool) string {
+	if ok {
+		return "ok"
+	}
+	return "missing"
+}
+
+func ternary(cond bool, a, b string) string {
+	if cond {
+		return a
+	}
+	return b
+}
+
+func copyPath(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return copyDir(src, dst)
+	}
+	return copyFile(src, dst)
+}
+
+func copyDir(src, dst string) error {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := copyPath(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0o644)
 }

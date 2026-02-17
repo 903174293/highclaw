@@ -18,23 +18,24 @@ type BashInput struct {
 	Timeout int    `json:"timeout,omitempty"` // Timeout in seconds
 }
 
-// BashOutput represents the output from the bash tool.
-type BashOutput struct {
-	Stdout   string `json:"stdout"`
-	Stderr   string `json:"stderr"`
-	ExitCode int    `json:"exitCode"`
-	Error    string `json:"error,omitempty"`
-}
-
 // Bash executes a shell command and returns the output.
 func Bash(ctx context.Context, inputJSON string) (string, error) {
 	var input BashInput
 	if err := json.Unmarshal([]byte(inputJSON), &input); err != nil {
 		return "", fmt.Errorf("invalid bash input: %w", err)
 	}
+	// Compatibility: accept cmd field used by some tool-call emitters.
+	if strings.TrimSpace(input.Command) == "" {
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(inputJSON), &raw); err == nil {
+			if cmd, ok := raw["cmd"].(string); ok {
+				input.Command = strings.TrimSpace(cmd)
+			}
+		}
+	}
 
 	if input.Command == "" {
-		return "", fmt.Errorf("command is required")
+		return "", fmt.Errorf("missing 'command' parameter")
 	}
 
 	// Default timeout: 30 seconds
@@ -54,30 +55,24 @@ func Bash(ctx context.Context, inputJSON string) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	output := BashOutput{
-		ExitCode: 0,
-	}
-
 	err := cmd.Run()
-	output.Stdout = stdout.String()
-	output.Stderr = stderr.String()
+	out := stdout.String()
+	errOut := stderr.String()
 
+	// Match ZeroClaw shell behavior: return plain stdout on success; on failure,
+	// surface stderr as tool error so agent prints `Error: ...`.
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			output.ExitCode = exitErr.ExitCode()
-		} else {
-			output.Error = err.Error()
-			output.ExitCode = -1
+		msg := strings.TrimSpace(errOut)
+		if msg == "" {
+			msg = err.Error()
 		}
+		return "", fmt.Errorf("%s", msg)
 	}
 
-	// Format output as JSON
-	result, err := json.Marshal(output)
-	if err != nil {
-		return "", fmt.Errorf("marshal output: %w", err)
+	if strings.TrimSpace(out) != "" {
+		return out, nil
 	}
-
-	return string(result), nil
+	return errOut, nil
 }
 
 // BashProcess manages a long-running bash process.

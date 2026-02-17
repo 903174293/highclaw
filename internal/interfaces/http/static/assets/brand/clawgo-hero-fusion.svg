@@ -1,0 +1,54 @@
+<svg width="168" height="168" viewBox="0 0 168 168" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bodyBlue" x1="42" y1="28" x2="116" y2="146" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#82D2F2"/>
+      <stop offset="1" stop-color="#61B8DF"/>
+    </linearGradient>
+    <linearGradient id="lobRed" x1="74" y1="8" x2="124" y2="66" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF8B3D"/>
+      <stop offset="1" stop-color="#E43F1A"/>
+    </linearGradient>
+    <linearGradient id="limeAccent" x1="22" y1="118" x2="146" y2="150" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D8FF74"/>
+      <stop offset="1" stop-color="#8ECB37"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="rotate(-6 84 84)">
+    <!-- lobster crown + claws -->
+    <ellipse cx="85" cy="34" rx="13" ry="18" fill="url(#lobRed)"/>
+    <path d="M85 18V52" stroke="#9B2312" stroke-opacity="0.45" stroke-width="2.6"/>
+    <path d="M70 22C61 17 55 18 50 24C57 24 61 28 63 34" fill="url(#lobRed)"/>
+    <path d="M100 22C109 17 115 18 120 24C113 24 109 28 107 34" fill="url(#lobRed)"/>
+    <path d="M71 36L61 42" stroke="#E75A2A" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M99 36L109 42" stroke="#E75A2A" stroke-width="2.6" stroke-linecap="round"/>
+
+    <!-- gopher body -->
+    <path d="M84 28C63 26 48 38 45 60L41 95C39 111 46 127 61 136C75 144 92 146 106 137C120 128 127 111 124 94L119 60C117 42 103 30 84 28Z" fill="url(#bodyBlue)"/>
+    <path d="M60 58C58 48 61 40 68 35" stroke="#9EDDF8" stroke-width="4" stroke-linecap="round" opacity="0.7"/>
+
+    <!-- ears -->
+    <ellipse cx="64" cy="45" rx="8" ry="6" fill="#69C2E6"/>
+    <ellipse cx="106" cy="45" rx="8" ry="6" fill="#69C2E6"/>
+
+    <!-- face -->
+    <ellipse cx="85" cy="68" rx="23" ry="26" fill="#F4F7FA"/>
+    <circle cx="90" cy="68" r="7" fill="#0D0B20"/>
+    <circle cx="70" cy="71" r="4.4" fill="#12243A"/>
+    <path d="M79 85C84 88 89 88 94 84" stroke="#2C3E54" stroke-width="2.8" stroke-linecap="round"/>
+    <path d="M68 84L58 92" stroke="#2C3E54" stroke-width="2.4" stroke-linecap="round"/>
+    <path d="M100 84L110 92" stroke="#2C3E54" stroke-width="2.4" stroke-linecap="round"/>
+
+    <!-- tiny limbs -->
+    <path d="M55 108L46 114" stroke="#D7C2CD" stroke-width="6" stroke-linecap="round"/>
+    <path d="M112 108L121 114" stroke="#D7C2CD" stroke-width="6" stroke-linecap="round"/>
+    <path d="M72 136L67 145" stroke="#D7C2CD" stroke-width="6" stroke-linecap="round"/>
+    <path d="M95 136L100 145" stroke="#D7C2CD" stroke-width="6" stroke-linecap="round"/>
+
+    <!-- openclaw signal: claw scratches + green performance sweep -->
+    <path d="M118 86L113 100" stroke="#1C2436" stroke-width="3" stroke-linecap="round" stroke-opacity="0.55"/>
+    <path d="M125 86L122 101" stroke="#1C2436" stroke-width="3" stroke-linecap="round" stroke-opacity="0.45"/>
+    <path d="M132 87L130 102" stroke="#1C2436" stroke-width="3" stroke-linecap="round" stroke-opacity="0.36"/>
+    <path d="M30 126C58 141 105 146 140 131" stroke="url(#limeAccent)" stroke-width="8" stroke-linecap="round" opacity="0.9"/>
+  </g>
+</svg>

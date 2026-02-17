@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -68,7 +69,15 @@ func runGateway(cmd *cobra.Command, args []string) error {
 
 	// Override config with CLI flags.
 	if cmd.Flags().Changed("port") {
-		cfg.Gateway.Port = gatewayPort
+		if gatewayPort == 0 {
+			randomPort, pickErr := pickRandomPort()
+			if pickErr != nil {
+				return pickErr
+			}
+			cfg.Gateway.Port = randomPort
+		} else {
+			cfg.Gateway.Port = gatewayPort
+		}
 	}
 	if cmd.Flags().Changed("bind") {
 		cfg.Gateway.Bind = gatewayBind
@@ -116,4 +125,17 @@ func runGateway(cmd *cobra.Command, args []string) error {
 	cancel() // Cancel context to shutdown HTTP server
 
 	return nil
+}
+
+func pickRandomPort() (int, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, fmt.Errorf("pick random port: %w", err)
+	}
+	defer ln.Close()
+	addr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok || addr.Port <= 0 {
+		return 0, fmt.Errorf("pick random port: invalid listener address")
+	}
+	return addr.Port, nil
 }

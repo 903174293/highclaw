@@ -2,143 +2,155 @@
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HighClaw Control</title>
-    <link rel="icon" type="image/png" href="/static/logo.png">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css">
-    <style>
-        /* Embedded critical styles to prevent flash */
-        :root {
-            --bg-color: #0d1117;
-            --sidebar-bg: #161b22;
-            --text-color: #c9d1d9;
-            --accent-color: #00add8;
-            --border-color: #30363d;
-        }
-
-        body {
-            margin: 0;
-            background: var(--bg-color);
-            color: var(--text-color);
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HighClaw Console</title>
+  <link rel="icon" type="image/png" href="/static/logo.png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="/static/style.css?v=20260216ze">
 </head>
 
 <body>
-    <div id="app">
-        <!-- Sidebar -->
-        <aside class="sidebar">
-            <div class="brand">
-                <img src="/static/logo.png" alt="HighClaw" class="logo-icon">
-                <h1>HighClaw<span class="brand-suffix">Control</span></h1>
+  <div id="app-layout">
+    <aside class="sidebar" aria-label="Sidebar">
+      <button id="new-session" class="new-session-btn active" type="button">
+        <i class="fa-solid fa-plus"></i>
+        <span data-i18n="new_session">New session</span>
+      </button>
+
+      <div class="session-block">
+        <div class="session-title" data-i18n="sessions_label">Sessions</div>
+        <div id="nav-sessions" class="session-list"></div>
+      </div>
+
+      <button id="nav-settings" class="settings-entry" type="button">
+        <i class="fa-solid fa-gear"></i>
+        <span data-i18n="settings">Settings</span>
+      </button>
+    </aside>
+
+    <main class="main-wrap">
+      <section id="page-chat" class="page-view active">
+        <div class="chat-hero" id="chat-hero">
+          <div class="hero-logo" aria-hidden="true">
+            <img src="/static/assets/brand/clawgo-hero-fusion.svg?v=20260216u" alt="">
+          </div>
+          <h1 data-i18n="chat_welcome">What can I help with?</h1>
+          <p data-i18n="chat_hint">Send a message to start a conversation</p>
+        </div>
+
+        <div id="chat-list" class="chat-list"></div>
+
+        <div class="composer-wrap">
+          <div class="composer">
+            <textarea id="chat-input" class="composer-input" rows="2" data-i18n-placeholder="chat_placeholder" placeholder="Message..."></textarea>
+            <div class="composer-actions">
+              <button class="composer-plus" type="button" aria-label="Add"><i class="fa-solid fa-plus"></i></button>
+              <button id="send-chat" class="composer-send" type="button" aria-label="Send"><i class="fa-solid fa-arrow-up"></i></button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="page-settings" class="page-view">
+        <div class="settings-shell">
+          <h2 data-i18n="settings">Settings</h2>
+
+          <nav class="settings-tabs" aria-label="Settings tabs">
+            <button class="settings-tab active" data-settings-tab="models" data-i18n="tab_models">AI Models</button>
+            <button class="settings-tab" data-settings-tab="providers" data-i18n="tab_providers">AI Providers</button>
+            <button class="settings-tab" data-settings-tab="messengers" data-i18n="tab_messengers">Messengers</button>
+            <button class="settings-tab" data-settings-tab="skills" data-i18n="tab_skills">Skills</button>
+            <button class="settings-tab" data-settings-tab="other" data-i18n="tab_other">Other</button>
+          </nav>
+
+          <section id="settings-view-models" class="settings-view active">
+            <h3 data-i18n="models_title">AI Models</h3>
+            <div class="field-block">
+              <label data-i18n="live_model">Live Model</label>
+              <div id="live-model-card" class="live-model-card">-</div>
             </div>
 
-            <nav class="nav-menu">
-                <a href="#" class="nav-item active" data-tab="chat"><i class="fas fa-comment-alt"></i> Chat</a>
-                <a href="#" class="nav-item" data-tab="sessions"><i class="fas fa-history"></i> Sessions</a>
-                <a href="#" class="nav-item" data-tab="channels"><i class="fas fa-network-wired"></i> Channels</a>
-                <a href="#" class="nav-item" data-tab="skills"><i class="fas fa-tools"></i> Skills</a>
-                <div class="nav-spacer"></div>
-                <a href="#" class="nav-item" data-tab="settings"><i class="fas fa-cog"></i> Settings</a>
-            </nav>
-
-            <div class="status-panel">
-                <div class="status-item">
-                    <span class="status-indicator online"></span>
-                    <span class="status-text">Gateway Active</span>
-                </div>
-                <div class="status-meta" id="uptime-display">Uptime: 0m</div>
-            </div>
-        </aside>
-
-        <!-- Main Content -->
-        <main class="main-content">
-            <!-- Chat View -->
-            <div id="view-chat" class="view active">
-                <div class="chat-header">
-                    <div class="model-selector">
-                        <i class="fas fa-robot"></i>
-                        <span id="current-model">Loading...</span>
-                    </div>
-                    <div class="session-info">
-                        <span class="badge" id="session-key">main</span>
-                    </div>
-                </div>
-
-                <div class="chat-messages" id="chat-messages">
-                    <div class="message system">
-                        <div class="avatar"><i class="fas fa-info"></i></div>
-                        <div class="content">Welcome to HighClaw Control. Start a conversation with your agent.</div>
-                    </div>
-                </div>
-
-                <div class="chat-input-area">
-                    <div class="input-wrapper">
-                        <textarea id="chat-input"
-                            placeholder="Message HighClaw... (Enter to send, Shift+Enter for new line)"
-                            rows="1"></textarea>
-                        <button id="send-btn"><i class="fas fa-paper-plane"></i></button>
-                    </div>
-                    <div class="input-footer">
-                        <span><i class="fas fa-keyboard"></i> Cmd+K to clear</span>
-                        <span id="token-usage">0 tokens used</span>
-                    </div>
-                </div>
+            <div class="field-block">
+              <label data-i18n="change_model">Change Model</label>
+              <input id="model-search" class="text-input" type="text" data-i18n-placeholder="search_models" placeholder="Search models...">
             </div>
 
-            <!-- Other Views (Placeholders) -->
-            <div id="view-sessions" class="view">
-                <div class="view-header">
-                    <h2>Sessions</h2>
-                </div>
-                <div class="content-padding">
-                    <div id="sessions-list" class="card-grid"></div>
-                </div>
+            <div class="actions-row">
+              <button class="ghost-pill">+ <span data-i18n="add_provider">Add Provider</span></button>
             </div>
 
-            <div id="view-channels" class="view">
-                <div class="view-header">
-                    <h2>Channels</h2>
-                </div>
-                <div class="content-padding">
-                    <div id="channels-list" class="card-grid"></div>
-                </div>
+            <div id="models-list" class="list-stack"></div>
+          </section>
+
+          <section id="settings-view-providers" class="settings-view">
+            <h3 data-i18n="providers_title">Providers & API Keys</h3>
+            <div id="providers-grid" class="grid two"></div>
+          </section>
+
+          <section id="settings-view-messengers" class="settings-view">
+            <h3 data-i18n="messengers_title">Messengers</h3>
+            <div id="messengers-grid" class="grid two"></div>
+          </section>
+
+          <section id="settings-view-skills" class="settings-view">
+            <div class="title-row">
+              <h3 data-i18n="skills_title">Skills and Integrations</h3>
+              <button class="link-btn">+ <span data-i18n="add_custom_skill">Add custom skill</span></button>
+            </div>
+            <input id="skills-search" class="text-input" type="text" data-i18n-placeholder="search_skills" placeholder="Search by skills...">
+            <div id="skills-grid" class="grid two"></div>
+          </section>
+
+          <section id="settings-view-other" class="settings-view">
+            <h3 data-i18n="other_title">Other</h3>
+
+            <div class="field-block settings-group">
+              <label data-i18n="openclaw_folder">OpenClaw Folder</label>
+              <div class="row-card"><span data-i18n="openclaw_folder_value">OpenClaw folder</span><button id="open-config-dir" class="link-btn" data-i18n="open_folder">Open folder</button></div>
+              <p class="muted" data-i18n="openclaw_folder_desc">Contains your local OpenClaw state and app data.</p>
             </div>
 
-            <div id="view-skills" class="view">
-                <div class="view-header">
-                    <h2>Skills</h2>
-                </div>
-                <div class="content-padding">
-                    <div id="skills-list" class="list-group"></div>
-                </div>
+            <div class="field-block settings-group">
+              <label data-i18n="workspace">Workspace</label>
+              <div class="row-card"><span data-i18n="workspace_value">Agent workspace</span><button id="open-workspace-dir" class="link-btn" data-i18n="open_folder">Open folder</button></div>
+              <p class="muted" data-i18n="workspace_desc">Contains editable .md files (AGENTS, SOUL, USER, IDENTITY, TOOLS, HEARTBEAT, BOOTSTRAP) that shape the agent.</p>
             </div>
 
-            <div id="view-settings" class="view">
-                <div class="view-header">
-                    <h2>Settings</h2>
-                </div>
-                <div class="content-padding">
-                    <div class="settings-form">
-                        <div class="form-group">
-                            <label>Agent Model</label>
-                            <select id="setting-model" class="form-control"></select>
-                        </div>
-                        <div class="form-group">
-                            <label>Workspace Path</label>
-                            <input type="text" id="setting-workspace" class="form-control" readonly>
-                        </div>
-                        <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
-                    </div>
-                </div>
+            <div class="field-block settings-group">
+              <label data-i18n="terminal_title">Terminal</label>
+              <div class="meta-list">
+                <div><span class="meta-k" data-i18n="show_in_sidebar">Show in sidebar</span><label class="switch"><input id="pref-show-terminal" type="checkbox"><span></span></label></div>
+                <div><span class="meta-k link-btn" data-i18n="open_terminal">Open Terminal</span></div>
+              </div>
+              <p class="muted" data-i18n="terminal_desc">Built-in terminal with openclaw and bundled tools in PATH.</p>
             </div>
-        </main>
-    </div>
 
-    <script src="/static/app.js"></script>
+            <div class="field-block settings-group">
+              <label data-i18n="app_title">App</label>
+              <div class="meta-list">
+                <div><span class="meta-k" data-i18n="version_label">Version</span><span>Atomic Bot v1.0.4</span></div>
+                <div><span class="meta-k" data-i18n="auto_start">Auto start</span><label class="switch"><input id="pref-auto-start" type="checkbox"><span></span></label></div>
+                <div><span class="meta-k" data-i18n="license">License</span><span class="link-btn">PolyForm Noncommercial 1.0.0</span></div>
+                <div><span class="link-btn">Legacy</span></div>
+              </div>
+            </div>
+
+            <div class="field-block settings-group">
+              <label data-i18n="about_title">About</label>
+              <div class="meta-list">
+                <div><span class="meta-k">© 2026 Atomic Bot</span></div>
+                <div><span class="meta-k">Support</span><span class="link-btn">support@atomicbot.ai</span></div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <script src="/static/app.js?v=20260216ze"></script>
 </body>
 
 </html>

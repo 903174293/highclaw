@@ -14,10 +14,12 @@ type SecurityPolicy struct {
 
 func NewSecurityPolicy(cfg *config.Config) *SecurityPolicy {
 	allowed := map[string]struct{}{}
-	list := cfg.Agent.Sandbox.Allow
-	if len(list) == 0 {
-		list = []string{"git", "ls", "cat", "grep", "find", "pwd", "echo", "wc", "head", "tail", "go"}
-	}
+	// Baseline allowlist. Keep network fetch commands enabled for parity with
+	// weather/tool workflows commonly used in ZeroClaw-style prompts.
+	list := []string{"git", "npm", "cargo", "ls", "cat", "grep", "find", "echo", "pwd", "wc", "head", "tail", "curl", "wget"}
+	// Merge user-defined entries instead of replacing baseline, because some
+	// existing configs store tool ids here (e.g. "bash"), not OS command names.
+	list = append(list, cfg.Agent.Sandbox.Allow...)
 	for _, cmd := range list {
 		cmd = strings.TrimSpace(cmd)
 		if cmd != "" {
@@ -40,23 +42,23 @@ func (p *SecurityPolicy) ValidateBashInput(inputJSON string) error {
 	}
 
 	lc := strings.ToLower(cmd)
-	if strings.Contains(lc, "`") || strings.Contains(lc, "$(") || strings.Contains(lc, ">") {
+	if strings.Contains(lc, "`") || strings.Contains(lc, "$(") || strings.Contains(lc, "${") || strings.Contains(lc, ">") {
 		return fmt.Errorf("command blocked by policy")
 	}
-	for _, bad := range []string{"rm ", "sudo ", "curl ", "wget ", "ssh ", "scp ", "chmod ", "chown "} {
-		if strings.Contains(lc, bad) {
-			return fmt.Errorf("high-risk command blocked by policy")
-		}
-	}
 
+	hasCommand := false
 	for _, seg := range splitCommandSegments(cmd) {
 		base := baseCommand(seg)
 		if base == "" {
 			continue
 		}
+		hasCommand = true
 		if _, ok := p.allowed[base]; !ok {
 			return fmt.Errorf("command not allowed by policy: %s", base)
 		}
+	}
+	if !hasCommand {
+		return fmt.Errorf("command is required")
 	}
 
 	return nil

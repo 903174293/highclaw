@@ -1,0 +1,26 @@
+<svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="12" y1="10" x2="84" y2="86" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D8FF74"/>
+      <stop offset="1" stop-color="#8ECB37"/>
+    </linearGradient>
+  </defs>
+  <g transform="rotate(-7 48 48)">
+    <rect x="15" y="15" width="66" height="66" rx="18" fill="url(#g)"/>
+
+    <!-- go: compact, aerodynamic G + O -->
+    <path d="M51.8 34.4C44.3 34.4 38.2 40.4 38.2 47.9C38.2 55.4 44.3 61.4 51.8 61.4C58.2 61.4 63.5 57 64.9 51.1H52.8V46H71.2C71.6 47.3 71.8 48.6 71.8 49.9C71.8 59.2 64.3 66.6 55.1 66.6C45.8 66.6 38.3 59.2 38.3 49.9C38.3 40.6 45.8 33.2 55.1 33.2C59.7 33.2 64 34.9 67.1 38L63.5 41.5C61.4 39.5 58.5 38.4 55.4 38.4C54.2 38.4 53 38.6 51.8 39V34.4Z" fill="#1D2510" fill-opacity="0.9"/>
+    <circle cx="68.2" cy="58.8" r="6.8" fill="#1D2510" fill-opacity="0.9"/>
+    <circle cx="68.2" cy="58.8" r="2.2" fill="#D8FF74"/>
+
+    <!-- performance lines -->
+    <rect x="23" y="41" width="12" height="4" rx="2" fill="#1D2510" fill-opacity="0.45"/>
+    <rect x="21" y="47.5" width="9" height="3.5" rx="1.75" fill="#1D2510" fill-opacity="0.34"/>
+    <rect x="22.5" y="53" width="6" height="3" rx="1.5" fill="#1D2510" fill-opacity="0.24"/>
+
+    <!-- claw marks embedded in O -->
+    <path d="M61.5 50.8L58 60" stroke="#1D2510" stroke-width="2.6" stroke-linecap="round" stroke-opacity="0.42"/>
+    <path d="M66 50L63.2 60.6" stroke="#1D2510" stroke-width="2.6" stroke-linecap="round" stroke-opacity="0.38"/>
+    <path d="M70.5 50.8L68.5 61" stroke="#1D2510" stroke-width="2.6" stroke-linecap="round" stroke-opacity="0.33"/>
+  </g>
+</svg>

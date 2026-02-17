@@ -116,7 +116,7 @@ func (s *Server) handlePairingStatus(c *gin.Context) {
 
 // handleGetConfig returns the current configuration.
 func (s *Server) handleGetConfig(c *gin.Context) {
-	c.JSON(http.StatusOK, s.cfg)
+	c.JSON(http.StatusOK, s.publicConfig())
 }
 
 // handlePatchConfig updates the configuration.
@@ -127,30 +127,143 @@ func (s *Server) handlePatchConfig(c *gin.Context) {
 		return
 	}
 
-	// Apply patches to config fields
+	// Apply patches to config fields.
 	if agentRaw, ok := patch["agent"]; ok {
-		var agentPatch config.AgentConfig
+		var agentPatch struct {
+			Model     *string                          `json:"model"`
+			Workspace *string                          `json:"workspace"`
+			Sandbox   *config.SandboxConfig            `json:"sandbox"`
+			Providers map[string]config.ProviderConfig `json:"providers"`
+		}
 		if err := json.Unmarshal(agentRaw, &agentPatch); err == nil {
-			if agentPatch.Model != "" {
-				s.cfg.Agent.Model = agentPatch.Model
+			if agentPatch.Model != nil {
+				s.cfg.Agent.Model = strings.TrimSpace(*agentPatch.Model)
 			}
-			if agentPatch.Workspace != "" {
-				s.cfg.Agent.Workspace = agentPatch.Workspace
+			if agentPatch.Workspace != nil {
+				s.cfg.Agent.Workspace = strings.TrimSpace(*agentPatch.Workspace)
+			}
+			if agentPatch.Sandbox != nil {
+				s.cfg.Agent.Sandbox = *agentPatch.Sandbox
+			}
+			if len(agentPatch.Providers) > 0 {
+				if s.cfg.Agent.Providers == nil {
+					s.cfg.Agent.Providers = make(map[string]config.ProviderConfig)
+				}
+				for key, provider := range agentPatch.Providers {
+					existing := s.cfg.Agent.Providers[key]
+					if strings.TrimSpace(provider.APIKey) != "" {
+						existing.APIKey = strings.TrimSpace(provider.APIKey)
+					}
+					if provider.BaseURL != "" {
+						existing.BaseURL = strings.TrimSpace(provider.BaseURL)
+					}
+					s.cfg.Agent.Providers[key] = existing
+				}
 			}
 		}
 	}
 
 	if gatewayRaw, ok := patch["gateway"]; ok {
-		var gatewayPatch config.GatewayConfig
+		var gatewayPatch struct {
+			Port *int    `json:"port"`
+			Bind *string `json:"bind"`
+			Mode *string `json:"mode"`
+			Auth *struct {
+				Mode     *string `json:"mode"`
+				Token    *string `json:"token"`
+				Password *string `json:"password"`
+			} `json:"auth"`
+		}
 		if err := json.Unmarshal(gatewayRaw, &gatewayPatch); err == nil {
-			if gatewayPatch.Port != 0 {
-				s.cfg.Gateway.Port = gatewayPatch.Port
+			if gatewayPatch.Port != nil && *gatewayPatch.Port > 0 {
+				s.cfg.Gateway.Port = *gatewayPatch.Port
 			}
-			if gatewayPatch.Bind != "" {
-				s.cfg.Gateway.Bind = gatewayPatch.Bind
+			if gatewayPatch.Bind != nil {
+				s.cfg.Gateway.Bind = strings.TrimSpace(*gatewayPatch.Bind)
 			}
-			if gatewayPatch.Mode != "" {
-				s.cfg.Gateway.Mode = gatewayPatch.Mode
+			if gatewayPatch.Mode != nil {
+				s.cfg.Gateway.Mode = strings.TrimSpace(*gatewayPatch.Mode)
+			}
+			if gatewayPatch.Auth != nil {
+				if gatewayPatch.Auth.Mode != nil {
+					s.cfg.Gateway.Auth.Mode = strings.TrimSpace(*gatewayPatch.Auth.Mode)
+				}
+				if gatewayPatch.Auth.Token != nil {
+					s.cfg.Gateway.Auth.Token = strings.TrimSpace(*gatewayPatch.Auth.Token)
+				}
+				if gatewayPatch.Auth.Password != nil {
+					s.cfg.Gateway.Auth.Password = *gatewayPatch.Auth.Password
+				}
+			}
+		}
+	}
+
+	if channelsRaw, ok := patch["channels"]; ok {
+		var channelsPatch struct {
+			Telegram *struct {
+				BotToken *string `json:"botToken"`
+			} `json:"telegram"`
+			Discord *struct {
+				Token *string `json:"token"`
+			} `json:"discord"`
+			Slack *struct {
+				BotToken *string `json:"botToken"`
+				AppToken *string `json:"appToken"`
+			} `json:"slack"`
+		}
+		if err := json.Unmarshal(channelsRaw, &channelsPatch); err == nil {
+			if channelsPatch.Telegram != nil && channelsPatch.Telegram.BotToken != nil {
+				s.cfg.Channels.Telegram.BotToken = strings.TrimSpace(*channelsPatch.Telegram.BotToken)
+			}
+			if channelsPatch.Discord != nil && channelsPatch.Discord.Token != nil {
+				s.cfg.Channels.Discord.Token = strings.TrimSpace(*channelsPatch.Discord.Token)
+			}
+			if channelsPatch.Slack != nil {
+				if channelsPatch.Slack.BotToken != nil {
+					s.cfg.Channels.Slack.BotToken = strings.TrimSpace(*channelsPatch.Slack.BotToken)
+				}
+				if channelsPatch.Slack.AppToken != nil {
+					s.cfg.Channels.Slack.AppToken = strings.TrimSpace(*channelsPatch.Slack.AppToken)
+				}
+			}
+		}
+	}
+
+	if webRaw, ok := patch["web"]; ok {
+		var webPatch struct {
+			Auth *struct {
+				Enabled           *bool   `json:"enabled"`
+				Username          *string `json:"username"`
+				Password          *string `json:"password"`
+				SessionTTLMinutes *int    `json:"sessionTtlMinutes"`
+			} `json:"auth"`
+			Preferences *struct {
+				ShowTerminalInSidebar *bool `json:"showTerminalInSidebar"`
+				AutoStart             *bool `json:"autoStart"`
+			} `json:"preferences"`
+		}
+		if err := json.Unmarshal(webRaw, &webPatch); err == nil {
+			if webPatch.Auth != nil {
+				if webPatch.Auth.Enabled != nil {
+					s.cfg.Web.Auth.Enabled = *webPatch.Auth.Enabled
+				}
+				if webPatch.Auth.Username != nil {
+					s.cfg.Web.Auth.Username = strings.TrimSpace(*webPatch.Auth.Username)
+				}
+				if webPatch.Auth.Password != nil {
+					s.cfg.Web.Auth.Password = *webPatch.Auth.Password
+				}
+				if webPatch.Auth.SessionTTLMinutes != nil && *webPatch.Auth.SessionTTLMinutes > 0 {
+					s.cfg.Web.Auth.SessionTTLMinutes = *webPatch.Auth.SessionTTLMinutes
+				}
+			}
+			if webPatch.Preferences != nil {
+				if webPatch.Preferences.ShowTerminalInSidebar != nil {
+					s.cfg.Web.Preferences.ShowTerminalInSidebar = *webPatch.Preferences.ShowTerminalInSidebar
+				}
+				if webPatch.Preferences.AutoStart != nil {
+					s.cfg.Web.Preferences.AutoStart = *webPatch.Preferences.AutoStart
+				}
 			}
 		}
 	}
@@ -161,7 +274,60 @@ func (s *Server) handlePatchConfig(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "config updated", "config": s.cfg})
+	c.JSON(http.StatusOK, gin.H{"message": "config updated", "config": s.publicConfig()})
+}
+
+func (s *Server) handleMeta(c *gin.Context) {
+	providersConfigured := map[string]bool{}
+	for key, provider := range s.cfg.Agent.Providers {
+		providersConfigured[key] = strings.TrimSpace(provider.APIKey) != ""
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"version": "v2026.2.13",
+		"paths": gin.H{
+			"configDir":  config.ConfigDir(),
+			"configFile": config.ConfigPath(),
+			"workspace":  s.cfg.Agent.Workspace,
+		},
+		"providers": gin.H{
+			"configured": providersConfigured,
+		},
+		"channels": gin.H{
+			"telegram": strings.TrimSpace(s.cfg.Channels.Telegram.BotToken) != "",
+			"discord":  strings.TrimSpace(s.cfg.Channels.Discord.Token) != "",
+			"slack":    strings.TrimSpace(s.cfg.Channels.Slack.BotToken) != "",
+		},
+		"web": gin.H{
+			"authEnabled":           s.cfg.Web.Auth.Enabled,
+			"showTerminalInSidebar": s.cfg.Web.Preferences.ShowTerminalInSidebar,
+			"autoStart":             s.cfg.Web.Preferences.AutoStart,
+		},
+	})
+}
+
+func (s *Server) publicConfig() *config.Config {
+	if s.cfg == nil {
+		return &config.Config{}
+	}
+	cp := *s.cfg
+	cp.Gateway.Auth.Token = ""
+	cp.Gateway.Auth.Password = ""
+	cp.Web.Auth.Password = ""
+	if cp.Agent.Providers != nil {
+		redacted := make(map[string]config.ProviderConfig, len(cp.Agent.Providers))
+		for key, provider := range cp.Agent.Providers {
+			provider.APIKey = ""
+			redacted[key] = provider
+		}
+		cp.Agent.Providers = redacted
+	}
+	cp.Channels.Telegram.BotToken = ""
+	cp.Channels.Discord.Token = ""
+	cp.Channels.Slack.BotToken = ""
+	cp.Channels.Slack.AppToken = ""
+	cp.Channels.BlueBubbles.Password = ""
+	return &cp
 }
 
 // handleListSessions returns all sessions.
@@ -339,6 +505,8 @@ func (s *Server) handleChat(c *gin.Context) {
 		sessionKey = "main"
 	}
 
+	var history []agent.ChatMessage
+
 	// Ensure session exists
 	if s.sessions != nil {
 		sess := s.sessions.GetOrCreate(sessionKey, "web")
@@ -347,6 +515,7 @@ func (s *Server) handleChat(c *gin.Context) {
 			Content: req.Message,
 			Channel: "web",
 		})
+		history = sessionToAgentHistory(sess.Messages(), 16)
 	}
 
 	// Call agent
@@ -355,16 +524,19 @@ func (s *Server) handleChat(c *gin.Context) {
 		return
 	}
 
+	start := time.Now()
 	result, err := s.agent.Run(c.Request.Context(), &agent.RunRequest{
 		SessionKey: sessionKey,
 		Channel:    "web",
 		Message:    req.Message,
+		History:    history,
 	})
 	if err != nil {
 		s.logger.Error("agent run failed", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "agent error: " + err.Error()})
 		return
 	}
+	latencyMS := time.Since(start).Milliseconds()
 
 	// Store assistant response in session
 	if s.sessions != nil {
@@ -378,9 +550,54 @@ func (s *Server) handleChat(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"response": result.Reply,
-		"usage":    result.TokensUsed,
+		"response":  result.Reply,
+		"usage":     result.TokensUsed,
+		"latencyMs": latencyMS,
+		"model":     s.cfg.Agent.Model,
 	})
+}
+
+func sessionToAgentHistory(msgs []protocol.ChatMessage, limit int) []agent.ChatMessage {
+	if len(msgs) == 0 {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 12
+	}
+	start := 0
+	if len(msgs) > limit {
+		start = len(msgs) - limit
+	}
+	out := make([]agent.ChatMessage, 0, len(msgs)-start)
+	for _, msg := range msgs[start:] {
+		role := strings.TrimSpace(strings.ToLower(msg.Role))
+		switch role {
+		case "user", "assistant", "system":
+		default:
+			continue
+		}
+		content := strings.TrimSpace(msg.Content)
+		if content == "" {
+			continue
+		}
+		content = trimForModelContext(content, 3000)
+		out = append(out, agent.ChatMessage{
+			Role:    role,
+			Content: content,
+		})
+	}
+	return out
+}
+
+func trimForModelContext(text string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return text
+	}
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	return string(runes[:maxRunes]) + "..."
 }
 
 func (s *Server) recordIdempotencyKey(key string) bool {
@@ -439,7 +656,7 @@ func (s *Server) handleChannelsStatus(c *gin.Context) {
 
 // handleListModels returns all available models.
 func (s *Server) handleListModels(c *gin.Context) {
-	models := model.GetAllModels()
+	models := model.GetAllModelsComplete()
 	c.JSON(http.StatusOK, gin.H{"models": models})
 }
 
