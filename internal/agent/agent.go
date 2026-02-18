@@ -419,8 +419,8 @@ func (r *Runner) buildSystemPrompt(req *RunRequest) string {
 	}
 	b.WriteString("\n")
 	b.WriteString("## Tool Use Protocol\n\n")
-	b.WriteString("To use a tool, wrap a JSON object in <tool_call></tool_call> tags:\n\n")
-	b.WriteString("```\n<tool_call>\n{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n</tool_call>\n```\n\n")
+	b.WriteString("To use a tool, wrap a JSON object in <invoke> tags:\n\n")
+	b.WriteString("```\n<invoke>\n{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n</invoke>\n```\n\n")
 	b.WriteString("You may use multiple tool calls in a single response. ")
 	b.WriteString("After tool execution, results appear in <tool_result> tags. ")
 	b.WriteString("Continue reasoning with the results until you can give a final answer.\n\n")
@@ -1166,10 +1166,14 @@ func (p *openAIProvider) Chat(ctx context.Context, req *ChatRequest, model strin
 			Content: msg.Content,
 		})
 	}
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 4096 // 默认 4096，与 Anthropic 保持一致
+	}
 	openAIReq := &providers.OpenAIChatRequest{
 		Model:       model,
 		Messages:    messages,
-		MaxTokens:   req.MaxTokens,
+		MaxTokens:   maxTokens,
 		Temperature: req.Temperature,
 	}
 	resp, err := p.client.Chat(ctx, openAIReq)
