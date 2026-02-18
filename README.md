@@ -131,57 +131,126 @@ highclaw migrate openclaw
 
 > **Dev fallback (no global install):** prefix commands with `go run ./cmd/highclaw --` (example: `go run ./cmd/highclaw -- status`).
 
-## Session Flow: `agent -m` + `tui`
+## Session Management — Unified Multi-Session Engine
 
-HighClaw now uses one unified local session store (`~/.highclaw/sessions`) for both CLI and TUI:
+HighClaw implements a unified local session store (`~/.highclaw/sessions`) shared by **CLI, TUI, and all channels**. Every conversation is tracked, persisted, and switchable — giving you full control over multi-task workflows.
 
-- Every `highclaw agent -m "..."` run is persisted as a **new session**.
-- You can bind a message to an existing session: `highclaw agent -m "..." --session <key>`.
-- `highclaw tui` loads those sessions in the left sidebar.
-- You can switch sessions in TUI and continue chatting from any saved context.
-- The sidebar groups sessions by source: **CLI / TUI / OTHER**.
-- Sidebar supports live filter: focus sidebar and type keywords.
+### Core Capabilities
 
-### Session management commands
+| Feature | Description |
+|---------|-------------|
+| **Auto-create** | Every `highclaw agent -m "..."` creates a new session automatically |
+| **Multi-turn resume** | `highclaw agent -m "..." --session <key>` resumes an existing session with full history |
+| **TUI integration** | TUI sidebar shows all sessions from CLI and TUI, with live switching |
+| **Session persistence** | All sessions saved as JSON files in `~/.highclaw/sessions/` |
+| **Auto-cleanup** | `sessions prune` removes stale sessions (default: 30 days, max 500) |
+| **Channel binding** | External channels (Telegram/Discord/etc.) bind to sessions via routing |
+| **Memory association** | Every memory entry tagged with `session_key` for per-session recall |
 
-```bash
-highclaw sessions list
-highclaw sessions get <key>
-highclaw sessions current
-highclaw sessions switch <key>
-highclaw sessions reset <key>
-highclaw sessions delete <key>
-highclaw sessions bindings
-highclaw sessions bind <channel> <conversation> <sessionKey>
-highclaw sessions unbind <channel> <conversation>
+### Session Key Format
+
+```
+agent:{agentId}:{sessionName}
 ```
 
-### External channels default session policy
+Examples:
+- `agent:main:cli-1234567890` — CLI one-shot session
+- `agent:main:session-42601` — TUI interactive session
+- `agent:main:main` — Default session for external channels
 
-- Non-switchable terminals/channels (e.g. WhatsApp/Telegram/webhook/websocket) use a default external session:
-  - `agent:main:main`
-- You can override per conversation with binding commands:
-  - `sessions bind <channel> <conversation> <sessionKey>`
-- CLI/TUI keep explicit session switching support.
-
-### TUI key actions
-
-- `Tab`: switch focus between sidebar and input
-- `↑` / `↓`: select session in sidebar
-- `Enter`: send message (input focus) / open session (sidebar focus)
-- `Ctrl+N`: create a new session
-- `Ctrl+R`: reload session list
-- `Ctrl+C`: quit
-
-### Quick verification
+### CLI Commands
 
 ```bash
+# Send a single message (creates new session)
+highclaw agent -m "Hello!"
+
+# Resume an existing session (multi-turn)
+highclaw agent -m "Continue our topic" --session agent:main:cli-1234567890
+
+# Session management
+highclaw sessions list                    # List all sessions
+highclaw sessions get <key>               # Show session details (JSON)
+highclaw sessions current                 # Show current active session
+highclaw sessions switch <key>            # Switch active session
+highclaw sessions reset <key>             # Clear message history
+highclaw sessions delete <key>            # Delete a session permanently
+
+# Session cleanup
+highclaw sessions prune                   # Clean up stale sessions (default: 30d / 500 max)
+highclaw sessions prune --max-age 7       # Prune sessions idle > 7 days
+highclaw sessions prune --max-count 100   # Cap at 100 sessions
+
+# External channel bindings
+highclaw sessions bindings                # List all bindings
+highclaw sessions bind <ch> <conv> <key>  # Bind channel conversation to session
+highclaw sessions unbind <ch> <conv>      # Remove binding
+```
+
+### External Channels — DM Scope Routing (Inspired by OpenClaw)
+
+HighClaw implements **4-level DM Scope** for per-sender session isolation, matching OpenClaw's industry-leading design:
+
+| `dmScope` | Session Key Format | Use Case |
+|-----------|-------------------|----------|
+| `main` | `agent:main:main` | All DMs share one session (legacy mode) |
+| `per-peer` | `agent:main:direct:<peerId>` | Each user gets own session, merged across channels |
+| `per-channel-peer` | `agent:main:<channel>:direct:<peerId>` | Each user/channel pair isolated (**recommended**) |
+| `per-account-channel-peer` | `agent:main:<channel>:<accountId>:direct:<peerId>` | Full isolation for multi-bot setups |
+
+**Group/Channel messages** are always routed by group ID:
+```
+agent:main:<channel>:<peerKind>:<groupId>
+```
+
+**Configuration** (`~/.highclaw/config.yaml`):
+
+```yaml
+session:
+  scope: per-sender         # 全局启用 per-sender 路由
+  dmScope: per-channel-peer # DM 隔离级别
+  mainKey: main             # 主会话名
+  identityLinks:            # 跨渠道身份合并
+    alice:
+      - telegram:alice_tg
+      - whatsapp:+1234567890
+```
+
+**Explicit Binding Override** — CLI/TUI keep explicit session switching support:
+
+```bash
+highclaw sessions bind telegram 123456789 agent:main:custom-session
+highclaw sessions unbind telegram 123456789
+highclaw sessions bindings
+```
+
+### TUI Key Actions
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Switch focus between sidebar and input |
+| `↑` / `↓` | Navigate session list |
+| `Enter` | Send message (input) / Open session (sidebar) |
+| `Ctrl+N` | Create a new session |
+| `Ctrl+L` | Clear current view |
+| `Ctrl+R` | Reload session list |
+| `Ctrl+C` | Quit |
+
+### Quick Verification
+
+```bash
+# Create two sessions
 highclaw agent -m "first message"
 highclaw agent -m "second message"
+
+# Resume the first session
+highclaw sessions list
+highclaw agent -m "continue first topic" --session <first-session-key>
+
+# Open TUI and see all sessions in sidebar
 highclaw tui
 ```
 
-You should see at least two new CLI-created sessions in the TUI sidebar.
+You should see at least two CLI sessions in the TUI sidebar, with the first having 2 turns of conversation.
 
 ## Deployment Playbook (Windows / Ubuntu / CentOS / macOS)
 
@@ -266,29 +335,98 @@ Every subsystem is a **trait** — swap implementations with a config change, ze
 
 When an unsupported `runtime.kind` is configured, HighClaw now exits with a clear error instead of silently falling back to native.
 
-### Memory System (Full-Stack Search Engine)
+### Memory System — Industry-Leading Full-Stack Search Engine
 
-All custom, zero external dependencies — no Pinecone, no Elasticsearch, no LangChain:
+**Zero external dependencies. No Pinecone. No Elasticsearch. No LangChain. No Redis. Everything runs inside a single SQLite file.**
 
-| Layer | Implementation |
-|-------|---------------|
-| **Vector DB** | Embeddings stored as BLOB in SQLite, cosine similarity search |
-| **Keyword Search** | FTS5 virtual tables with BM25 scoring |
-| **Hybrid Merge** | Custom weighted merge function (`vector.rs`) |
-| **Embeddings** | `EmbeddingProvider` trait — OpenAI, custom URL, or noop |
-| **Chunking** | Line-based markdown chunker with heading preservation |
-| **Caching** | SQLite `embedding_cache` table with LRU eviction |
-| **Safe Reindex** | Rebuild FTS5 + re-embed missing vectors atomically |
+HighClaw ships with one of the most complete memory systems in the open-source AI agent space. Most agent frameworks delegate memory to cloud vector databases or heavyweight search engines — HighClaw implements the entire pipeline natively in Go, with **zero network dependencies** for core memory operations.
 
-The agent automatically recalls, saves, and manages memory via tools.
+#### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   HighClaw Memory Engine                    │
+├──────────────┬──────────────┬───────────────────────────────┤
+│  FTS5 Index  │  Vector DB   │      Hybrid Merge Engine      │
+│  (BM25 score)│  (Cosine Sim)│  (configurable weight blend)  │
+├──────────────┴──────────────┴───────────────────────────────┤
+│              SQLite (single file: brain.db)                  │
+├──────────────┬──────────────┬───────────────────────────────┤
+│  Embedding   │  LRU Cache   │    Memory Hygiene Engine      │
+│  Provider    │  (10K entries)│  (archive / purge / prune)    │
+├──────────────┴──────────────┴───────────────────────────────┤
+│  Markdown Chunker  │  Auto-Save  │  Session-Aware Storage   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### Full-Stack Capabilities
+
+| Layer | Implementation | Why it matters |
+|-------|---------------|----------------|
+| **Hybrid Search** | FTS5 keyword (BM25) + vector cosine similarity, weighted merge | Better recall than keyword-only or vector-only — catches both exact terms and semantic meaning |
+| **CJK Fallback** | FTS5 → LIKE auto-fallback for Chinese/Japanese/Korean | Most FTS engines silently fail on CJK; HighClaw handles it transparently |
+| **Vector DB** | Embeddings stored as BLOB in SQLite, computed cosine similarity | No external vector database needed — zero infra cost |
+| **Embedding Provider** | OpenAI-compatible API, custom URL, or noop | Works offline (noop), or plug any embedding service |
+| **Embedding Cache** | SQLite `embedding_cache` table with LRU eviction (default: 10,000 entries) | Avoids redundant API calls, saves cost and latency |
+| **Keyword Search** | FTS5 virtual tables with BM25 scoring | Fast, battle-tested full-text search built into SQLite |
+| **Markdown Chunker** | Heading-aware document splitter with configurable token limits | Preserves document structure, respects heading boundaries |
+| **Memory Hygiene** | Auto-archive (7d), auto-purge (30d), conversation retention pruning, 12h throttle | Self-maintaining — no manual cleanup needed |
+| **Safe Reindex** | Rebuild FTS5 + re-embed missing vectors atomically | Zero downtime index rebuilds via `highclaw memory sync` |
+| **Session-Aware** | Every memory entry tagged with `session_key`, `channel`, `sender` | Cross-session recall with per-session isolation when needed |
+| **Dual Backend** | SQLite (full-featured) + Markdown (append-only, human-readable) | Choose power or simplicity; `none` falls back to Markdown safely |
+| **CLI Access** | `memory search / get / list / status / sync / reset` | Full memory inspection without code — debug and verify in seconds |
+
+#### Comparison with Other Agent Frameworks
+
+| Capability | HighClaw | LangChain | AutoGPT | CrewAI |
+|---|---|---|---|---|
+| Hybrid Search (keyword + vector) | ✅ Native | ❌ Requires Pinecone/Weaviate | ❌ | ❌ |
+| Zero external dependencies | ✅ Single SQLite file | ❌ Requires vector DB service | ❌ Requires Redis | ❌ Requires ChromaDB |
+| CJK full-text search | ✅ Auto-fallback | ❌ | ❌ | ❌ |
+| Embedding cache with LRU | ✅ Built-in | ❌ | ❌ | ❌ |
+| Memory hygiene (auto-cleanup) | ✅ Archive + Purge + Prune | ❌ Manual | ❌ Manual | ❌ |
+| Session-aware memory | ✅ Per-session tagging | ❌ | ❌ | ❌ |
+| CLI memory inspection | ✅ search/get/list/status | ❌ | ❌ | ❌ |
+| Offline operation | ✅ Works without network | ❌ | ❌ | ❌ |
+| Single binary deployment | ✅ | ❌ | ❌ | ❌ |
+
+#### Configuration
 
 ```yaml
 memory:
-  backend: "sqlite" # "sqlite", "markdown", "none"
-  auto_save: true
-  embedding_provider: "openai"
-  vector_weight: 0.7
-  keyword_weight: 0.3
+  backend: "sqlite"            # "sqlite" | "markdown" | "none"
+  autoSave: true               # auto-save user/assistant messages
+  hygieneEnabled: true          # auto archive + purge + prune
+  archiveAfterDays: 7           # archive daily files after N days
+  purgeAfterDays: 30            # purge archives after N days
+  conversationRetentionDays: 30 # prune old conversation entries
+  embeddingProvider: "openai"   # "none" | "openai" | "custom:https://..."
+  embeddingModel: "text-embedding-3-small"
+  embeddingDimensions: 1536
+  vectorWeight: 0.7             # hybrid search: vector weight
+  keywordWeight: 0.3            # hybrid search: keyword weight
+  embeddingCacheSize: 10000     # LRU cache capacity
+  chunkMaxTokens: 512           # markdown chunker token limit
+```
+
+#### Quick Demo
+
+```bash
+# Search memory (supports Chinese, English, mixed queries)
+highclaw memory search "项目架构"
+highclaw memory search "deployment strategy"
+
+# Inspect a specific entry
+highclaw memory get user_msg_abc123
+
+# List all entries, filtered by category
+highclaw memory list --category conversation --limit 10
+
+# Check memory health
+highclaw memory status
+
+# Rebuild search index
+highclaw memory sync
 ```
 
 ## Security

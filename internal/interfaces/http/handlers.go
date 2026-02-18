@@ -487,8 +487,12 @@ func (s *Server) handleChat(c *gin.Context) {
 	}
 
 	var req struct {
-		Message string `json:"message"`
-		Session string `json:"session"`
+		Message   string `json:"message"`
+		Session   string `json:"session"`
+		PeerID    string `json:"peerId"`
+		PeerKind  string `json:"peerKind"`
+		GroupID   string `json:"groupId"`
+		AccountID string `json:"accountId"`
 	}
 
 	if err := c.BindJSON(&req); err != nil {
@@ -503,12 +507,20 @@ func (s *Server) handleChat(c *gin.Context) {
 
 	sessionKey := req.Session
 	if sessionKey == "" {
-		resolved, err := session.ResolveSession("web", c.ClientIP())
-		if err == nil && strings.TrimSpace(resolved) != "" {
-			sessionKey = resolved
-		} else {
-			sessionKey = session.DefaultExternalSessionKey
+		// 使用 DM Scope 路由
+		peerID := strings.TrimSpace(req.PeerID)
+		if peerID == "" {
+			peerID = c.ClientIP()
 		}
+		peer := session.PeerContext{
+			Channel:      "web",
+			PeerID:       peerID,
+			PeerKind:     req.PeerKind,
+			GroupID:      req.GroupID,
+			AccountID:    req.AccountID,
+			Conversation: c.ClientIP(),
+		}
+		sessionKey = session.ResolveSessionFromConfig(s.cfg, peer)
 	}
 
 	var history []agent.ChatMessage

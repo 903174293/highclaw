@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 )
 
 // SessionsDir returns the path to the sessions directory.
@@ -134,8 +136,55 @@ func (m *Manager) AutoSave(enabled bool) {
 	defer m.mu.RUnlock()
 	for _, sess := range m.sessions {
 		if err := sess.Save(); err != nil {
-			// Best-effort persistence; individual failures should not panic runtime.
 			continue
 		}
 	}
+}
+
+// PruneResult 记录自动清理的结果
+type PruneResult struct {
+	Pruned int
+	Capped int
+}
+
+// PruneStaleSessions 清理过期会话和超量会话
+// maxAge: 会话最大空闲天数（0 表示不按时间清理）
+// maxCount: 最大会话数量（0 表示不限制）
+func PruneStaleSessions(maxAgeDays, maxCount int) (PruneResult, error) {
+	all, err := LoadAll()
+	if err != nil {
+		return PruneResult{}, err
+	}
+	if len(all) == 0 {
+		return PruneResult{}, nil
+	}
+
+	var result PruneResult
+	now := time.Now()
+
+	// 按 LastActivityAt 降序排列
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].LastActivityAt.After(all[j].LastActivityAt)
+	})
+
+	keep := make(map[string]bool)
+	for i, s := range all {
+		// 按时间淘汰
+		if maxAgeDays > 0 && now.Sub(s.LastActivityAt).Hours() > float64(maxAgeDays*24) {
+			if err := Delete(s.Key); err == nil {
+				result.Pruned++
+			}
+			continue
+		}
+		// 按数量淘汰
+		if maxCount > 0 && i >= maxCount {
+			if err := Delete(s.Key); err == nil {
+				result.Capped++
+			}
+			continue
+		}
+		keep[s.Key] = true
+	}
+
+	return result, nil
 }

@@ -23,6 +23,7 @@ type Config struct {
 	Web           WebConfig           `json:"web"`
 	Autonomy      AutonomyConfig      `json:"autonomy"`
 	Memory        MemoryConfig        `json:"memory"`
+	Session       SessionConfig       `json:"session"`
 	Reliability   ReliabilityConfig   `json:"reliability"`
 	ModelRoutes   []ModelRouteConfig  `json:"modelRoutes"`
 	Tunnel        TunnelConfig        `json:"tunnel"`
@@ -30,6 +31,22 @@ type Config struct {
 	Secrets       SecretsConfig       `json:"secrets"`
 	Identity      IdentityConfig      `json:"identity"`
 	Observability ObservabilityConfig `json:"observability"`
+}
+
+// SessionConfig 控制会话路由策略
+type SessionConfig struct {
+	// Scope 控制全局会话粒度: "per-sender" | "global"
+	Scope string `json:"scope"`
+	// DMScope 控制 DM 会话隔离级别:
+	//   "main"                   — 所有 DM 共享主会话
+	//   "per-peer"               — 每个用户独立会话，跨渠道合并
+	//   "per-channel-peer"       — 每个渠道每个用户独立（推荐）
+	//   "per-account-channel-peer" — 完全隔离（多 bot 场景）
+	DMScope string `json:"dmScope"`
+	// MainKey 主会话名称，默认 "main"
+	MainKey string `json:"mainKey"`
+	// IdentityLinks 跨渠道身份映射，同一用户在不同渠道的 ID 可合并
+	IdentityLinks map[string][]string `json:"identityLinks"`
 }
 
 // AgentConfig configures the AI agent runtime.
@@ -363,6 +380,11 @@ func Default() *Config {
 			KeywordWeight:             0.3,
 			EmbeddingCacheSize:        10000,
 			ChunkMaxTokens:            512,
+		},
+		Session: SessionConfig{
+			Scope:   "per-sender",
+			DMScope: "per-channel-peer",
+			MainKey: "main",
 		},
 		Reliability: ReliabilityConfig{
 			ProviderRetries:   2,

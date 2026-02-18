@@ -102,15 +102,33 @@ var agentChatCmd = &cobra.Command{
 		}
 
 		sessionKey := strings.TrimSpace(agentSession)
-		if sessionKey == "" {
+		isNewSession := sessionKey == ""
+		if isNewSession {
 			sessionKey = fmt.Sprintf("agent:%s:%s", "main", fmt.Sprintf("cli-%d", time.Now().UnixNano()))
 		} else if !strings.HasPrefix(sessionKey, "agent:") {
 			sessionKey = fmt.Sprintf("agent:%s:%s", "main", sessionKey)
 		}
+
+		// 续发模式：加载已有会话历史作为上下文
+		var history []agent.ChatMessage
+		if !isNewSession {
+			if existing, err := session.Load(sessionKey); err == nil {
+				for _, m := range existing.Messages() {
+					role := strings.TrimSpace(m.Role)
+					content := strings.TrimSpace(m.Content)
+					if role != "" && content != "" {
+						history = append(history, agent.ChatMessage{Role: role, Content: content})
+					}
+				}
+			}
+		}
+		history = append(history, agent.ChatMessage{Role: "user", Content: msg})
+
 		result, err := runner.Run(context.Background(), &agent.RunRequest{
 			SessionKey:  sessionKey,
 			Channel:     "cli",
 			Message:     msg,
+			History:     history,
 			Provider:    strings.TrimSpace(agentProvider),
 			Model:       strings.TrimSpace(agentModel),
 			Temperature: agentTemperature,
@@ -122,7 +140,10 @@ var agentChatCmd = &cobra.Command{
 		if modelName == "" {
 			modelName = cfg.Agent.Model
 		}
-		_ = saveCLISession(sessionKey, modelName, msg, result.Reply)
+
+		// 保存完整历史（包含新轮次）
+		history = append(history, agent.ChatMessage{Role: "assistant", Content: result.Reply})
+		_ = saveCLISessionFull(sessionKey, "cli", modelName, history)
 
 		fmt.Println(result.Reply)
 		return nil
@@ -591,6 +612,31 @@ var sessionsUnbindCmd = &cobra.Command{
 			return err
 		}
 		fmt.Printf("binding removed: %s/%s\n", args[0], args[1])
+		return nil
+	},
+}
+
+var sessionsPruneMaxAge int
+var sessionsPruneMaxCount int
+
+var sessionsPruneCmd = &cobra.Command{
+	Use:   "prune",
+	Short: "Clean up stale and excess sessions",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		result, err := session.PruneStaleSessions(sessionsPruneMaxAge, sessionsPruneMaxCount)
+		if err != nil {
+			return err
+		}
+		if result.Pruned == 0 && result.Capped == 0 {
+			fmt.Println("No sessions pruned.")
+		} else {
+			if result.Pruned > 0 {
+				fmt.Printf("Pruned %d stale sessions (older than %d days)\n", result.Pruned, sessionsPruneMaxAge)
+			}
+			if result.Capped > 0 {
+				fmt.Printf("Capped %d excess sessions (limit: %d)\n", result.Capped, sessionsPruneMaxCount)
+			}
+		}
 		return nil
 	},
 }
@@ -1832,6 +1878,9 @@ func init() {
 	sessionsCmd.AddCommand(sessionsBindingsCmd)
 	sessionsCmd.AddCommand(sessionsBindCmd)
 	sessionsCmd.AddCommand(sessionsUnbindCmd)
+	sessionsPruneCmd.Flags().IntVar(&sessionsPruneMaxAge, "max-age", 30, "Max idle days before pruning")
+	sessionsPruneCmd.Flags().IntVar(&sessionsPruneMaxCount, "max-count", 500, "Max session count")
+	sessionsCmd.AddCommand(sessionsPruneCmd)
 
 	// Cron subcommands
 	cronCmd.AddCommand(cronListCmd)
@@ -2510,20 +2559,23 @@ func writeJSONFile(path string, v any) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-func saveCLISession(sessionKey, modelName, userMessage, assistantReply string) error {
-	now := time.Now().UnixMilli()
-	history := []protocol.ChatMessage{{
-		Role:      "user",
-		Content:   userMessage,
-		Channel:   "cli",
-		Timestamp: now,
-	}, {
-		Role:      "assistant",
-		Content:   assistantReply,
-		Channel:   "cli",
-		Timestamp: time.Now().UnixMilli(),
-	}}
-	return session.SaveFromHistory(sessionKey, "cli", "main", modelName, history)
+// saveCLISessionFull 保存完整的会话历史（支持多轮续发）
+func saveCLISessionFull(sessionKey, channel, modelName string, history []agent.ChatMessage) error {
+	msgs := make([]protocol.ChatMessage, 0, len(history))
+	for _, h := range history {
+		role := strings.TrimSpace(h.Role)
+		content := strings.TrimSpace(h.Content)
+		if role == "" || content == "" {
+			continue
+		}
+		msgs = append(msgs, protocol.ChatMessage{
+			Role:      role,
+			Content:   content,
+			Channel:   channel,
+			Timestamp: time.Now().UnixMilli(),
+		})
+	}
+	return session.SaveFromHistory(sessionKey, channel, "main", modelName, msgs)
 }
 
 func resolveSessionKey(input string) (string, error) {

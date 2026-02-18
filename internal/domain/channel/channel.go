@@ -41,6 +41,13 @@ type Message struct {
 	Files     []File
 	Timestamp int64
 	Metadata  map[string]any
+
+	// PeerKind 消息类型: "direct" | "group" | "channel"
+	PeerKind string
+	// GroupID 群组/频道 ID（PeerKind != "direct" 时有效）
+	GroupID string
+	// AccountID 多 bot 场景下区分不同 bot 账户
+	AccountID string
 }
 
 // Image represents an image attachment.

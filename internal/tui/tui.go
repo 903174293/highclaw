@@ -330,65 +330,91 @@ func (m Model) View() string {
 }
 
 func (m *Model) renderHeader() string {
-	logo := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("45")).
-		Render("🦀")
-	title := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("159")).
-		Padding(0, 1).
-		Render("HIGHCLAW TUI")
-	info := lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Render(
-		fmt.Sprintf("agent %s | session %s | model %s", m.opts.Agent, lastSegment(m.currentSession), m.cfg.Agent.Model),
+	accent := lipgloss.Color("45")
+	dim := lipgloss.Color("240")
+	bright := lipgloss.Color("252")
+
+	logo := lipgloss.NewStyle().Bold(true).Foreground(accent).Render("⚡ HIGHCLAW")
+	ver := lipgloss.NewStyle().Foreground(dim).Render(" v0.1 ")
+	pipe := lipgloss.NewStyle().Foreground(dim).Render("│")
+
+	sessionLabel := lastSegment(m.currentSession)
+	if len(sessionLabel) > 20 {
+		sessionLabel = sessionLabel[:19] + "…"
+	}
+	info := lipgloss.NewStyle().Foreground(bright).Render(
+		fmt.Sprintf(" %s %s session:%s %s model:%s",
+			pipe, m.opts.Agent, sessionLabel, pipe, m.cfg.Agent.Model),
 	)
-	bar := lipgloss.NewStyle().Foreground(lipgloss.Color("239")).Render(strings.Repeat("─", max(10, m.width-2)))
-	head := lipgloss.JoinHorizontal(lipgloss.Top, logo, " ", title, "  ", info)
+
+	netIcon := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("●")
+	if m.reachable {
+		netIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render("●")
+	}
+
+	head := lipgloss.JoinHorizontal(lipgloss.Center, logo, ver, info, " ", netIcon)
+	bar := lipgloss.NewStyle().Foreground(dim).Render(strings.Repeat("━", max(10, m.width-2)))
 	return lipgloss.NewStyle().Padding(0, 1).Width(m.width).
 		Render(lipgloss.JoinVertical(lipgloss.Left, head, bar))
 }
 
 func (m *Model) renderBody() string {
 	sidebarWidth := max(sidebarMinWidth, m.width/4)
-	mainWidth := max(20, m.width-sidebarWidth-3)
+	mainWidth := max(20, m.width-sidebarWidth-4)
 	bodyHeight := max(8, m.height-inputHeight-6)
+
+	borderColor := lipgloss.Color("238")
+	accentBorder := lipgloss.Color("62")
+
+	sidebarBorder := lipgloss.Border{
+		Top: "─", Bottom: "─", Left: "│", Right: "│",
+		TopLeft: "┌", TopRight: "┬", BottomLeft: "└", BottomRight: "┴",
+	}
+	mainBorder := lipgloss.Border{
+		Top: "─", Bottom: "─", Left: "│", Right: "│",
+		TopLeft: "┬", TopRight: "┐", BottomLeft: "┴", BottomRight: "┘",
+	}
 
 	sidebarStyle := lipgloss.NewStyle().
 		Width(sidebarWidth).
 		Height(bodyHeight).
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("62")).
+		Border(sidebarBorder).
+		BorderForeground(accentBorder).
 		Padding(0, 1)
 
 	mainStyle := lipgloss.NewStyle().
 		Width(mainWidth).
 		Height(bodyHeight).
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("238"))
+		Border(mainBorder).
+		BorderForeground(borderColor).
+		Padding(0, 1)
 
 	sidebar := sidebarStyle.Render(m.renderSessions())
 	main := mainStyle.Render(m.viewport.View())
-	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(strings.Repeat("│\n", bodyHeight+2))
-	return lipgloss.JoinHorizontal(lipgloss.Top, sidebar, divider, main)
+	return lipgloss.JoinHorizontal(lipgloss.Top, sidebar, main)
 }
 
 func (m *Model) renderSessions() string {
 	var b strings.Builder
-	focusMarker := ""
+	accent := lipgloss.Color("45")
+	dim := lipgloss.Color("240")
+	bright := lipgloss.Color("252")
+
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(accent)
 	if m.focus == focusSessions {
-		focusMarker = " (focus)"
+		titleStyle = titleStyle.Background(lipgloss.Color("236"))
 	}
-	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("45")).Render("Sessions" + focusMarker))
+	b.WriteString(titleStyle.Render(" ⚡ Sessions "))
+
 	filterText := strings.TrimSpace(m.sessionFilter)
 	if filterText != "" {
-		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("111")).Render("Filter: "+filterText))
-	} else {
-		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render("Filter: (type to search)"))
+		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("111")).Render(" 🔍 "+filterText))
 	}
-	b.WriteString("\n")
+	b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render(strings.Repeat("─", sidebarMinWidth-4)))
+
 	visible := m.filteredSessions()
 	if len(visible) == 0 {
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render("No sessions found"))
+		b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render(" (empty)"))
 		return b.String()
 	}
 	limit := len(visible)
@@ -398,11 +424,12 @@ func (m *Model) renderSessions() string {
 	shown := visible[:limit]
 	groups := []struct {
 		title string
+		icon  string
 		id    string
 	}{
-		{title: "CLI", id: "cli"},
-		{title: "TUI", id: "tui"},
-		{title: "OTHER", id: "other"},
+		{title: "CLI", icon: "▸", id: "cli"},
+		{title: "TUI", icon: "▸", id: "tui"},
+		{title: "OTHER", icon: "▸", id: "other"},
 	}
 	for _, g := range groups {
 		groupHas := false
@@ -411,75 +438,83 @@ func (m *Model) renderSessions() string {
 				continue
 			}
 			if !groupHas {
-				b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Bold(true).Render(g.title))
+				groupLabel := lipgloss.NewStyle().Foreground(dim).Bold(true).Render(g.icon + " " + g.title)
+				b.WriteString("\n" + groupLabel)
 				groupHas = true
 			}
+			isCurrent := s.Key == m.currentSession
+			isSelected := i == m.selectedSession
+
 			prefix := "  "
-			style := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-			if i == m.selectedSession {
+			style := lipgloss.NewStyle().Foreground(bright)
+			if isSelected && m.focus == focusSessions {
 				prefix = "▶ "
-				style = style.Foreground(lipgloss.Color("229")).Bold(true)
+				style = lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Bold(true).Background(lipgloss.Color("236"))
+			} else if isCurrent {
+				prefix = "● "
+				style = lipgloss.NewStyle().Foreground(accent)
 			}
 			label := s.Label
 			if label == "" {
 				label = s.Key
 			}
-			meta := fmt.Sprintf("%s · %s", shortSession(label, 24), relativeTime(s.UpdatedAt))
+			meta := fmt.Sprintf("%s · %s", shortSession(label, 20), relativeTime(s.UpdatedAt))
 			b.WriteString("\n" + style.Render(prefix+meta))
 		}
 	}
 	if len(visible) > limit {
-		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render(fmt.Sprintf("... +%d more", len(visible)-limit)))
+		b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render(fmt.Sprintf(" +%d more", len(visible)-limit)))
 	}
 	return b.String()
 }
 
 func (m *Model) renderInput() string {
-	label := "Input"
+	label := " ✏ Input"
+	labelColor := lipgloss.Color("111")
 	if m.pending {
-		label = "Thinking " + m.spinner.View()
+		label = " ⏳ " + m.spinner.View() + " Thinking..."
+		labelColor = lipgloss.Color("214")
+	}
+	inputBorder := lipgloss.Border{
+		Top: "─", Bottom: "─", Left: "│", Right: "│",
+		TopLeft: "├", TopRight: "┤", BottomLeft: "└", BottomRight: "┘",
 	}
 	box := lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("99")).
+		Border(inputBorder).
+		BorderForeground(lipgloss.Color("238")).
 		Padding(0, 1).
 		Width(max(20, m.width-2))
-	return box.Render(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111")).Render(label) + "\n" + m.textarea.View())
+	return box.Render(lipgloss.NewStyle().Bold(true).Foreground(labelColor).Render(label) + "\n" + m.textarea.View())
 }
 
 func (m *Model) renderStatus() string {
-	network := "gateway: unreachable"
+	dim := lipgloss.Color("240")
+	bright := lipgloss.Color("250")
+
+	netIcon := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗")
+	netLabel := "offline"
 	if m.reachable {
-		network = "gateway: reachable"
+		netIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render("✓")
+		netLabel = "online"
 	}
+
 	errText := ""
 	if m.lastError != "" {
-		errText = " | error: " + m.lastError
-	}
-	tokenInfo := ""
-	visible := m.filteredSessions()
-	if len(visible) > 0 && m.selectedSession >= 0 && m.selectedSession < len(visible) {
-		s := visible[m.selectedSession]
-		if s.ContextTokens > 0 {
-			usedPct := 0
-			if s.ContextTokens > 0 {
-				usedPct = int(float64(s.TotalTokens) / float64(s.ContextTokens) * 100)
-			}
-			tokenInfo = fmt.Sprintf(" | tokens %dk/%dk (%d%%)", s.TotalTokens/1000, s.ContextTokens/1000, usedPct)
-		}
+		errText = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(" │ " + m.lastError)
 	}
 	rtt := ""
 	if m.lastRTT > 0 {
-		rtt = fmt.Sprintf(" | rtt %s", m.lastRTT.Round(time.Millisecond))
+		rtt = lipgloss.NewStyle().Foreground(dim).Render(fmt.Sprintf(" │ %s", m.lastRTT.Round(time.Millisecond)))
 	}
-	kb := "Tab switch focus • ↑↓ sessions • Enter send/select • type to filter • Ctrl+N new • Ctrl+R reload • Ctrl+C quit"
-	line1 := fmt.Sprintf("connected | %s | %s", network, m.currentSession)
-	line2 := fmt.Sprintf("agent %s | model %s%s%s%s", m.opts.Agent, m.cfg.Agent.Model, tokenInfo, rtt, errText)
-	sep := strings.Repeat("─", max(10, m.width-2))
-	return lipgloss.NewStyle().
-		Padding(0, 1).
-		Foreground(lipgloss.Color("246")).
-		Render(sep + "\n" + line1 + "\n" + line2 + "\n" + kb)
+
+	line1 := lipgloss.NewStyle().Foreground(bright).Render(
+		fmt.Sprintf(" %s %s │ %s │ %s", netIcon, netLabel, m.currentSession, m.cfg.Agent.Model),
+	)
+	kb := lipgloss.NewStyle().Foreground(dim).Render(
+		" Tab:focus  ↑↓:nav  Enter:send  Ctrl+N:new  Ctrl+R:reload  Ctrl+C:quit",
+	)
+	return lipgloss.NewStyle().Padding(0, 0).
+		Render(line1 + rtt + errText + "\n" + kb)
 }
 
 func (m *Model) resize() {
@@ -504,21 +539,30 @@ func (m *Model) updateViewport() {
 		return
 	}
 	var b strings.Builder
-	for _, line := range m.lines {
-		stamp := line.Timestamp.Format("15:04")
+	dim := lipgloss.Color("240")
+	for i, line := range m.lines {
+		stamp := lipgloss.NewStyle().Foreground(dim).Render(line.Timestamp.Format("15:04"))
+		roleIcon := "│"
 		roleStyle := lipgloss.NewStyle().Bold(true)
 		switch line.Role {
 		case "user":
+			roleIcon = "▸"
 			roleStyle = roleStyle.Foreground(lipgloss.Color("81"))
 		case "assistant":
+			roleIcon = "◂"
 			roleStyle = roleStyle.Foreground(lipgloss.Color("205"))
 		default:
+			roleIcon = "─"
 			roleStyle = roleStyle.Foreground(lipgloss.Color("214"))
 		}
-		b.WriteString(roleStyle.Render(fmt.Sprintf("[%s] %s", stamp, strings.ToUpper(line.Role))))
+		header := fmt.Sprintf(" %s %s %s", stamp, roleStyle.Render(roleIcon+" "+strings.ToUpper(line.Role)), "")
+		b.WriteString(header)
 		b.WriteString("\n")
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(line.Content))
-		b.WriteString("\n\n")
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Padding(0, 3).Render(line.Content))
+		if i < len(m.lines)-1 {
+			b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render(strings.Repeat("·", max(10, m.viewport.Width-6))))
+		}
+		b.WriteString("\n")
 	}
 	m.viewport.SetContent(strings.TrimRight(b.String(), "\n"))
 	m.viewport.GotoBottom()

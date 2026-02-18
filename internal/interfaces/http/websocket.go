@@ -192,9 +192,13 @@ func (c *WSClient) handlePing(msg WSMessage) {
 // handleChatSend handles chat messages.
 func (c *WSClient) handleChatSend(msg WSMessage) {
 	var params struct {
-		Message string `json:"message"`
-		Session string `json:"session"`
-		Channel string `json:"channel"`
+		Message   string `json:"message"`
+		Session   string `json:"session"`
+		Channel   string `json:"channel"`
+		PeerID    string `json:"peerId"`
+		PeerKind  string `json:"peerKind"`
+		GroupID   string `json:"groupId"`
+		AccountID string `json:"accountId"`
 	}
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
 		c.sendError(msg.ID, 400, "invalid params: "+err.Error())
@@ -212,12 +216,20 @@ func (c *WSClient) handleChatSend(msg WSMessage) {
 	}
 	sessionKey := params.Session
 	if sessionKey == "" {
-		resolved, err := session.ResolveSession(channel, c.id)
-		if err == nil && strings.TrimSpace(resolved) != "" {
-			sessionKey = resolved
-		} else {
-			sessionKey = session.DefaultExternalSessionKey
+		// 使用新的 DM Scope 路由
+		peerID := strings.TrimSpace(params.PeerID)
+		if peerID == "" {
+			peerID = c.id
 		}
+		peer := session.PeerContext{
+			Channel:      channel,
+			PeerID:       peerID,
+			PeerKind:     params.PeerKind,
+			GroupID:      params.GroupID,
+			AccountID:    params.AccountID,
+			Conversation: c.id,
+		}
+		sessionKey = session.ResolveSessionFromConfig(c.server.cfg, peer)
 	}
 
 	// Store user message in session
