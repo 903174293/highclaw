@@ -188,3 +188,16 @@ func PruneStaleSessions(maxAgeDays, maxCount int) (PruneResult, error) {
 
 	return result, nil
 }
+
+// GetLastSessionKey 返回最近活跃的会话 key（按 LastActivityAt 排序）
+func GetLastSessionKey() string {
+	sessions, err := LoadAll()
+	if err != nil || len(sessions) == 0 {
+		return ""
+	}
+	// 按最近活动时间倒序
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].LastActivityAt.After(sessions[j].LastActivityAt)
+	})
+	return sessions[0].Key
+}

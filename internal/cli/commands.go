@@ -38,6 +38,7 @@ var (
 	agentModel       string
 	agentTemperature float64
 	agentSession     string
+	agentLast        bool // 接续上次会话
 
 	cronTaskID      string
 	cronTaskSpec    string
@@ -102,6 +103,14 @@ var agentChatCmd = &cobra.Command{
 		}
 
 		sessionKey := strings.TrimSpace(agentSession)
+
+		// --last 参数：自动获取最近一次会话
+		if agentLast && sessionKey == "" {
+			if lastKey := session.GetLastSessionKey(); lastKey != "" {
+				sessionKey = lastKey
+			}
+		}
+
 		isNewSession := sessionKey == ""
 		if isNewSession {
 			sessionKey = fmt.Sprintf("agent:%s:%s", "main", fmt.Sprintf("cli-%d", time.Now().UnixNano()))
@@ -1970,6 +1979,7 @@ func init() {
 	cronCreateCmd.Flags().StringVar(&cronTaskCommand, "command", "", "Command to execute")
 	agentCmd.Flags().StringVarP(&agentMessage, "message", "m", "", "Send one message and exit")
 	agentCmd.Flags().StringVarP(&agentSession, "session", "s", "", "Associate message with an existing session key (default creates a new session)")
+	agentCmd.Flags().BoolVarP(&agentLast, "last", "l", false, "Continue the most recent session (shortcut for --session <last-session-key>)")
 	agentCmd.Flags().StringVarP(&agentProvider, "provider", "p", "", "Provider override (e.g. openrouter, anthropic, glm)")
 	agentCmd.Flags().StringVar(&agentModel, "model", "", "Model override (e.g. anthropic/claude-sonnet-4)")
 	agentCmd.Flags().Float64VarP(&agentTemperature, "temperature", "t", 0.7, "Sampling temperature (0.0 - 2.0)")

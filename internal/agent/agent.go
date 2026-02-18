@@ -1247,39 +1247,47 @@ func parseToolCalls(response string) (string, []ParsedToolCall) {
 	}
 
 	remaining := response
-	// Parse <tool_call> tags as fallback/compatibility.
-	for {
-		start := strings.Index(remaining, "<tool_call>")
-		if start == -1 {
-			break
-		}
-		before := strings.TrimSpace(remaining[:start])
-		if before != "" {
-			textParts = append(textParts, before)
-		}
-		rest := remaining[start+len("<tool_call>"):]
-		end := strings.Index(rest, "</tool_call>")
-		if end == -1 {
-			// malformed tag; keep remaining as text
-			remaining = rest
-			break
-		}
-		body := strings.TrimSpace(rest[:end])
-		parsedAny := false
-		for _, value := range extractJSONValues(body) {
-			extracted := parseToolCallsFromAny(value)
-			if len(extracted) > 0 {
-				parsedAny = true
-				calls = append(calls, extracted...)
+	// 解析 <tool_call> 和 <invoke> 标签（兼容 ZeroClaw 格式）
+	tagPairs := []struct {
+		open  string
+		close string
+	}{
+		{"<tool_call>", "</tool_call>"},
+		{"<invoke>", "</invoke>"},
+	}
+	for _, tag := range tagPairs {
+		for {
+			start := strings.Index(remaining, tag.open)
+			if start == -1 {
+				break
 			}
-		}
-		if !parsedAny {
-			call := parseToolCallJSON(body)
-			if call != nil {
-				calls = append(calls, *call)
+			before := strings.TrimSpace(remaining[:start])
+			if before != "" {
+				textParts = append(textParts, before)
 			}
+			rest := remaining[start+len(tag.open):]
+			end := strings.Index(rest, tag.close)
+			if end == -1 {
+				remaining = rest
+				break
+			}
+			body := strings.TrimSpace(rest[:end])
+			parsedAny := false
+			for _, value := range extractJSONValues(body) {
+				extracted := parseToolCallsFromAny(value)
+				if len(extracted) > 0 {
+					parsedAny = true
+					calls = append(calls, extracted...)
+				}
+			}
+			if !parsedAny {
+				call := parseToolCallJSON(body)
+				if call != nil {
+					calls = append(calls, *call)
+				}
+			}
+			remaining = rest[end+len(tag.close):]
 		}
-		remaining = rest[end+len("</tool_call>"):]
 	}
 
 	if len(calls) == 0 {
