@@ -444,6 +444,68 @@ HighClaw enforces security at **every layer** — not just the sandbox. It passe
 
 > **Run your own nmap:** `nmap -p 1-65535 <your-host>` — HighClaw binds to localhost only, so nothing is exposed unless you explicitly configure a tunnel.
 
+### Sandbox Policy (Workspace Scope)
+
+By default, HighClaw restricts all file and shell operations to the workspace directory (`~/.highclaw/workspace`). This prevents accidental access to sensitive system paths like `~/Desktop`, `/etc`, or `~/.ssh`.
+
+**Default behavior:** `workspaceOnly: true` (secure by default, matches ZeroClaw)
+
+#### Configuration Methods
+
+**Method 1: Permanent configuration (recommended)**
+
+```bash
+# Check current setting
+highclaw config get autonomy.workspaceOnly
+# Output: true
+
+# Allow access to absolute paths (e.g., ~/Desktop)
+highclaw config set autonomy.workspaceOnly false
+
+# Restore restriction
+highclaw config set autonomy.workspaceOnly true
+```
+
+**Method 2: Temporary override (single command)**
+
+```bash
+# Only affects this command, does not modify config file
+highclaw agent -m "Organize desktop images" --no-sandbox
+```
+
+**Method 3: Edit config file directly**
+
+```yaml
+# ~/.highclaw/config.yaml
+autonomy:
+  level: supervised
+  workspaceOnly: false  # Allow access to absolute paths
+  allowedCommands:      # Additional commands to allow (merged with defaults)
+    - docker
+    - kubectl
+  forbiddenPaths:       # Always blocked even when workspaceOnly=false
+    - /etc
+    - /root
+```
+
+#### Behavior Summary
+
+| Setting | Behavior |
+|---------|----------|
+| `workspaceOnly: true` (default) | Operations restricted to workspace; absolute paths blocked |
+| `workspaceOnly: false` | Allow access to absolute paths (e.g., `~/Desktop`) |
+| `--no-sandbox` flag | Temporary bypass for a single command |
+
+#### Approval Mechanism
+
+For medium/high-risk commands, HighClaw uses a **model self-approval** mechanism (same as ZeroClaw):
+
+- Shell tool accepts an `approved: bool` parameter
+- When executing risky commands, the model must set `"approved": true` in the tool call
+- If not set, the command returns an error, and the model retries with approval
+
+This is **not** manual user approval — the AI model decides whether to approve based on context and risk assessment.
+
 ### Channel allowlists (Telegram / Discord / Slack)
 
 Inbound sender policy is now consistent:
