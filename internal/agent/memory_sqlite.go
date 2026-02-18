@@ -296,15 +296,20 @@ func (s *sqliteMemoryStore) recall(query, key, sessionKey string, limit int) ([]
 	}
 
 	out, err := s.execTabs(sql)
+	if err != nil && strings.TrimSpace(query) != "" {
+		out, err = s.execTabs(buildLikeRecallSQL(query, sessionFilter, limit))
+	}
 	if err != nil {
-		if strings.TrimSpace(query) != "" {
-			out, err = s.execTabs(buildLikeRecallSQL(query, sessionFilter, limit))
-		}
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 	keywordEntries := parseMemoryEntries(out)
+	// FTS5 默认 tokenizer 不支持 CJK 分词，若 FTS 返回空则回退 LIKE
+	if len(keywordEntries) == 0 && strings.TrimSpace(query) != "" && strings.TrimSpace(key) == "" {
+		likeOut, likeErr := s.execTabs(buildLikeRecallSQL(query, sessionFilter, limit))
+		if likeErr == nil {
+			keywordEntries = parseMemoryEntries(likeOut)
+		}
+	}
 	if strings.TrimSpace(query) == "" {
 		return keywordEntries, nil
 	}
@@ -645,4 +650,50 @@ func (s *sqliteMemoryStore) hybridMerge(keywordEntries, vectorEntries []memoryEn
 		out = append(out, it.entry)
 	}
 	return out
+}
+
+// reindex 重建 FTS5 索引并为缺失 embedding 的条目补全向量
+func (s *sqliteMemoryStore) reindex() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 重建 FTS 索引
+	_, _ = s.exec("DELETE FROM memory_entries_fts;")
+	_, _ = s.exec("INSERT INTO memory_entries_fts(key, content) SELECT key, content FROM memory_entries;")
+
+	// 统计缺失 embedding 的条目
+	out, err := s.execTabs("SELECT key, content FROM memory_entries WHERE embedding IS NULL OR length(embedding) = 0;")
+	if err != nil {
+		return 0, err
+	}
+	if strings.TrimSpace(out) == "" {
+		return 0, nil
+	}
+
+	reEmbedded := 0
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		content := strings.TrimSpace(parts[1])
+		if key == "" || content == "" {
+			continue
+		}
+
+		s.mu.Unlock()
+		emb, embErr := s.getOrComputeEmbedding(content)
+		s.mu.Lock()
+
+		if embErr != nil || len(emb) == 0 {
+			continue
+		}
+		_, _ = s.exec(fmt.Sprintf(
+			"UPDATE memory_entries SET embedding=%s WHERE key=%s;",
+			sqlBlobOrNull(emb), sqlQuote(key),
+		))
+		reEmbedded++
+	}
+	return reEmbedded, nil
 }

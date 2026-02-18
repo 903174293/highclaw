@@ -1882,7 +1882,13 @@ func init() {
 	browserCmdGroup.AddCommand(browserInspectCmd)
 
 	// Memory subcommands
+	memorySearchCmd.Flags().IntVar(&memoryLimit, "limit", 20, "Max results to return")
+	memorySearchCmd.Flags().StringVar(&memoryCategory, "category", "", "Filter by category")
+	memoryListCmd.Flags().IntVar(&memoryLimit, "limit", 50, "Max results to return")
+	memoryListCmd.Flags().StringVar(&memoryCategory, "category", "", "Filter by category")
 	memoryCmd.AddCommand(memorySearchCmd)
+	memoryCmd.AddCommand(memoryGetCmd)
+	memoryCmd.AddCommand(memoryListCmd)
 	memoryCmd.AddCommand(memorySyncCmd)
 	memoryCmd.AddCommand(memoryStatusCmd)
 	memoryCmd.AddCommand(memoryResetCmd)
@@ -2585,4 +2591,29 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, data, 0o644)
+}
+
+// 记忆 CLI 桥接函数，调用 agent 包的公开 API
+func searchMemoryBackend(cfg *config.Config, query string, limit int, category string) ([]agent.MemoryEntryDTO, error) {
+	return agent.SearchMemory(cfg, query, limit, category)
+}
+
+func getMemoryByKey(cfg *config.Config, key string) (*agent.MemoryEntryDTO, error) {
+	return agent.GetMemory(cfg, key)
+}
+
+func listMemoryBackend(cfg *config.Config, category string, limit int) ([]agent.MemoryEntryDTO, error) {
+	return agent.ListMemory(cfg, category, limit)
+}
+
+func countMemoryBackend(cfg *config.Config) (int, error) {
+	return agent.CountMemory(cfg)
+}
+
+func memoryBackendLocation(cfg *config.Config) string {
+	return agent.MemoryLocation(cfg)
+}
+
+func memoryHealthBackend(cfg *config.Config) bool {
+	return agent.MemoryHealth(cfg)
 }
