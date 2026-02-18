@@ -35,10 +35,11 @@ import (
 var (
 	agentMessage     string
 	agentProvider    string
-	agentModel       string
-	agentTemperature float64
-	agentSession     string
-	agentLast        bool // 接续上次会话
+	agentModel          string
+	agentTemperature    float64
+	agentSession        string
+	agentLast           bool // 接续上次会话
+	agentNoWorkspaceOnly bool // 临时允许访问绝对路径
 
 	cronTaskID      string
 	cronTaskSpec    string
@@ -95,6 +96,13 @@ var agentChatCmd = &cobra.Command{
 		logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
 		}))
+
+		// --no-sandbox 临时覆盖 workspaceOnly 设置
+		if agentNoWorkspaceOnly {
+			v := false
+			cfg.Autonomy.WorkspaceOnly = &v
+		}
+
 		runner := agent.NewRunner(cfg, logger)
 
 		msg := strings.TrimSpace(strings.Join(args, " "))
@@ -1983,6 +1991,7 @@ func init() {
 	agentCmd.Flags().StringVarP(&agentProvider, "provider", "p", "", "Provider override (e.g. openrouter, anthropic, glm)")
 	agentCmd.Flags().StringVar(&agentModel, "model", "", "Model override (e.g. anthropic/claude-sonnet-4)")
 	agentCmd.Flags().Float64VarP(&agentTemperature, "temperature", "t", 0.7, "Sampling temperature (0.0 - 2.0)")
+	agentCmd.Flags().BoolVar(&agentNoWorkspaceOnly, "no-sandbox", false, "Allow access to paths outside workspace (e.g. ~/Desktop)")
 
 	modelsListCmd.Flags().BoolVar(&modelsShowAll, "all", false, "Show all models")
 	migrateOpenClawCmd.Flags().BoolVar(&migrateDryRun, "dry-run", false, "Preview migration actions without writing")
@@ -2081,6 +2090,13 @@ func lookupConfigKey(cfg *config.Config, key string) (any, error) {
 		return cfg.Hooks.Gmail.Account, nil
 	case "hooks.gmail.model":
 		return cfg.Hooks.Gmail.Model, nil
+	case "autonomy.level":
+		return cfg.Autonomy.Level, nil
+	case "autonomy.workspaceOnly":
+		if cfg.Autonomy.WorkspaceOnly == nil {
+			return true, nil // 默认值
+		}
+		return *cfg.Autonomy.WorkspaceOnly, nil
 	default:
 		return nil, fmt.Errorf("unsupported config key: %s", key)
 	}
@@ -2156,6 +2172,14 @@ func setConfigKey(cfg *config.Config, key, value string) error {
 		cfg.Hooks.Gmail.Account = value
 	case "hooks.gmail.model":
 		cfg.Hooks.Gmail.Model = value
+	case "autonomy.level":
+		cfg.Autonomy.Level = value
+	case "autonomy.workspaceOnly":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid bool for %s: %w", key, err)
+		}
+		cfg.Autonomy.WorkspaceOnly = &b
 	default:
 		return fmt.Errorf("unsupported config key: %s", key)
 	}
