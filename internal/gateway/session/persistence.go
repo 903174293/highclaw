@@ -26,6 +26,9 @@ func (s *Session) Save() error {
 		return fmt.Errorf("create sessions dir: %w", err)
 	}
 
+	// 保存前同步 messages 到 History
+	s.SyncHistory()
+
 	// Sanitize session key for filename
 	filename := sanitizeFilename(s.Key) + ".json"
 	path := filepath.Join(dir, filename)
@@ -57,6 +60,9 @@ func Load(key string) (*Session, error) {
 	if err := json.Unmarshal(data, &sess); err != nil {
 		return nil, fmt.Errorf("unmarshal session: %w", err)
 	}
+
+	// 从 History 恢复 messages
+	sess.RestoreMessages()
 
 	return &sess, nil
 }

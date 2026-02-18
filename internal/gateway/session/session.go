@@ -24,8 +24,11 @@ type Session struct {
 	// "mention" = only respond when mentioned; "always" = respond to all.
 	GroupActivation string `json:"groupActivation,omitempty"`
 
-	mu       sync.Mutex
-	messages []protocol.ChatMessage
+	// History 存储消息历史，用于持久化
+	History []protocol.ChatMessage `json:"history,omitempty"`
+
+	mu       sync.Mutex             `json:"-"`
+	messages []protocol.ChatMessage `json:"-"`
 }
 
 // Manager manages all active sessions.
@@ -110,6 +113,7 @@ func (s *Session) AddMessage(msg protocol.ChatMessage) {
 
 	msg.Timestamp = time.Now().UnixMilli()
 	s.messages = append(s.messages, msg)
+	s.History = append(s.History, msg) // 同步更新 History 用于持久化
 	s.MessageCount = len(s.messages)
 	s.LastActivityAt = time.Now()
 }
@@ -118,8 +122,13 @@ func (s *Session) AddMessage(msg protocol.ChatMessage) {
 func (s *Session) Messages() []protocol.ChatMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cp := make([]protocol.ChatMessage, len(s.messages))
-	copy(cp, s.messages)
+	// 优先使用 messages，如果为空则使用 History（从磁盘加载的情况）
+	src := s.messages
+	if len(src) == 0 && len(s.History) > 0 {
+		src = s.History
+	}
+	cp := make([]protocol.ChatMessage, len(src))
+	copy(cp, src)
 	return cp
 }
 
@@ -128,5 +137,26 @@ func (s *Session) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.messages = s.messages[:0]
+	s.History = s.History[:0]
 	s.MessageCount = 0
+}
+
+// SyncHistory 在保存前同步 messages 到 History
+func (s *Session) SyncHistory() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.messages) > 0 {
+		s.History = make([]protocol.ChatMessage, len(s.messages))
+		copy(s.History, s.messages)
+	}
+}
+
+// RestoreMessages 从 History 恢复 messages（加载后调用）
+func (s *Session) RestoreMessages() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.History) > 0 && len(s.messages) == 0 {
+		s.messages = make([]protocol.ChatMessage, len(s.History))
+		copy(s.messages, s.History)
+	}
 }

@@ -304,17 +304,13 @@ func (r *Runner) Run(ctx context.Context, req *RunRequest) (*RunResult, error) {
 			history = append(history, ChatMessage{Role: role, Content: content})
 		}
 	}
+	// 如果调用者已经传入了完整历史（包含最新消息），直接使用
+	// 否则追加新消息
 	if len(history) == 0 {
 		history = append(history, ChatMessage{Role: "user", Content: req.Message})
-	} else if strings.TrimSpace(req.Message) != "" {
-		// Keep memory-injected text aligned for multi-turn callers that pass explicit history.
-		for i := len(history) - 1; i >= 0; i-- {
-			if strings.EqualFold(strings.TrimSpace(history[i].Role), "user") {
-				history[i].Content = req.Message
-				break
-			}
-		}
 	}
+	// 注意：不再覆盖历史中的最后一条用户消息
+	// commands.go 已经把新消息追加到 history 中了
 	var totalUsage TokenUsage
 	history = autoCompactHistory(ctx, history, r.models, strings.TrimSpace(req.Provider), strings.TrimSpace(req.Model))
 	history = trimHistory(history)
