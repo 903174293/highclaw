@@ -24,8 +24,10 @@ import (
 )
 
 const (
-	sidebarMinWidth = 34
-	inputHeight     = 4
+	sidebarWidth = 42
+	inputHeight  = 3
+	headerHeight = 2
+	footerHeight = 2
 )
 
 type focusTarget int
@@ -33,9 +35,10 @@ type focusTarget int
 const (
 	focusInput focusTarget = iota
 	focusSessions
+	focusCommands
 )
 
-// Options configures TUI startup.
+// Options configures TUI startup
 type Options struct {
 	GatewayURL string
 	Agent      string
@@ -60,6 +63,12 @@ type sessionEntry struct {
 	TotalTokens   int
 }
 
+// tokenUsageInfo tracks token consumption
+type tokenUsageInfo struct {
+	input  int
+	output int
+}
+
 type bootMsg struct {
 	Sessions  []sessionEntry
 	Reachable bool
@@ -67,12 +76,14 @@ type bootMsg struct {
 }
 
 type assistantMsg struct {
-	Reply    string
-	Err      error
-	Duration time.Duration
+	Reply        string
+	Err          error
+	Duration     time.Duration
+	InputTokens  int
+	OutputTokens int
 }
 
-// Model represents the TUI state.
+// Model represents the TUI state
 type Model struct {
 	opts   Options
 	cfg    *config.Config
@@ -96,13 +107,25 @@ type Model struct {
 
 	focus focusTarget
 
-	reachable bool
-	pending   bool
-	lastError string
-	lastRTT   time.Duration
+	reachable  bool
+	pending    bool
+	lastError  string
+	lastRTT    time.Duration
+	tokenUsage tokenUsageInfo
+
+	// 消息队列（修复并发发送 bug）
+	messageQueue []string
+
+	// 命令模式
+	showCommands    bool
+	commandFilter   string
+	selectedCommand int
+
+	// 启动画面
+	showSplash bool
 }
 
-// NewModel creates a new TUI model.
+// NewModel creates a new TUI model
 func NewModel(opts Options) Model {
 	if strings.TrimSpace(opts.Agent) == "" {
 		opts.Agent = "main"
@@ -124,7 +147,7 @@ func NewModel(opts Options) Model {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	ta := textarea.New()
-	ta.Placeholder = "Message... (Enter send, Tab switch focus, Ctrl+N new session)"
+	ta.Placeholder = "Type message or /help for commands..."
 	ta.Focus()
 	ta.CharLimit = 10000
 	ta.SetHeight(inputHeight)
@@ -134,8 +157,8 @@ func NewModel(opts Options) Model {
 	vp.SetContent("")
 
 	sp := spinner.New()
-	sp.Spinner = spinner.Line
-	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("45"))
+	sp.Spinner = spinner.Dot
+	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
 
 	initialSession := buildSessionKey(opts.Agent, opts.Session)
 	if strings.TrimSpace(opts.Session) == "" || strings.EqualFold(strings.TrimSpace(opts.Session), "main") {
@@ -143,34 +166,27 @@ func NewModel(opts Options) Model {
 			initialSession = strings.TrimSpace(current)
 		}
 	}
-	model := Model{
-		opts:            opts,
-		cfg:             cfg,
-		runner:          agent.NewRunner(cfg, logger),
-		textarea:        ta,
-		viewport:        vp,
-		spinner:         sp,
-		currentSession:  initialSession,
-		selectedSession: 0,
-		focus:           focusInput,
-		lines: []chatLine{
-			{
-				Role:      "system",
-				Content:   "Welcome to HighClaw TUI. Press Enter to chat, Ctrl+N for a fresh session.",
-				Timestamp: time.Now(),
-			},
-		},
+
+	return Model{
+		opts:           opts,
+		cfg:            cfg,
+		runner:         agent.NewRunner(cfg, logger),
+		textarea:       ta,
+		viewport:       vp,
+		spinner:        sp,
+		currentSession: initialSession,
+		focus:          focusInput,
+		showSplash:     true,
+		messageQueue:   make([]string, 0),
 	}
-	model.updateViewport()
-	return model
 }
 
-// Init initializes the TUI.
+// Init initializes the TUI
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(textarea.Blink, m.spinner.Tick, loadBootCmd(m.opts))
 }
 
-// Update handles messages and updates the model.
+// Update handles messages and updates the model
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -184,6 +200,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case bootMsg:
+		m.showSplash = false
 		if msg.Err != nil {
 			m.lastError = msg.Err.Error()
 		}
@@ -201,15 +218,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		m.loadCurrentSession()
+		if len(m.lines) == 0 {
+			m.appendLine("system", "Welcome to HighClaw! Type /help for commands.")
+		}
 		m.updateViewport()
 		return m, nil
 
 	case assistantMsg:
 		m.pending = false
 		m.lastRTT = msg.Duration
+		m.tokenUsage.input += msg.InputTokens
+		m.tokenUsage.output += msg.OutputTokens
+
 		if msg.Err != nil {
 			m.lastError = msg.Err.Error()
-			m.appendLine("system", "Request failed: "+msg.Err.Error())
+			m.appendLine("system", "Error: "+msg.Err.Error())
 		} else {
 			reply := strings.TrimSpace(msg.Reply)
 			if reply == "" {
@@ -220,7 +244,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.persistCurrentSession()
 		}
 		m.updateViewport()
-		return m, nil
+
+		// 检查消息队列，处理下一条
+		if len(m.messageQueue) > 0 {
+			nextMsg := m.messageQueue[0]
+			m.messageQueue = m.messageQueue[1:]
+			m.pending = true
+			m.appendLine("user", nextMsg)
+			m.history = append(m.history, agent.ChatMessage{Role: "user", Content: nextMsg})
+			m.persistCurrentSession()
+			m.updateViewport()
+			cmds = append(cmds, sendMessageCmd(m.runner, m.currentSession, cloneHistory(m.history)))
+			cmds = append(cmds, m.spinner.Tick)
+		}
+		return m, tea.Batch(cmds...)
 
 	case spinner.TickMsg:
 		if m.pending {
@@ -231,10 +268,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// 处理全局快捷键
 		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
+		case tea.KeyCtrlC:
+			return m, tea.Quit
+		case tea.KeyEsc:
+			if m.showCommands {
+				m.showCommands = false
+				m.commandFilter = ""
+				return m, nil
+			}
+			if m.showSplash {
+				m.showSplash = false
+				return m, nil
+			}
 			return m, tea.Quit
 		case tea.KeyTab:
+			if m.showCommands {
+				m.showCommands = false
+				m.commandFilter = ""
+			}
 			if m.focus == focusInput {
 				m.focus = focusSessions
 				m.textarea.Blur()
@@ -251,12 +304,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.history = nil
 			m.updateViewport()
 			return m, nil
-		case tea.KeyBackspace:
-			if m.focus == focusSessions && len(m.sessionFilter) > 0 {
-				m.sessionFilter = m.sessionFilter[:len(m.sessionFilter)-1]
-				m.selectedSession = 0
-				return m, nil
-			}
 		case tea.KeyCtrlR:
 			return m, loadBootCmd(m.opts)
 		case tea.KeyUp:
@@ -264,25 +311,86 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.moveSessionSelection(-1)
 				return m, nil
 			}
+			if m.showCommands {
+				m.moveCommandSelection(-1)
+				return m, nil
+			}
 		case tea.KeyDown:
 			if m.focus == focusSessions {
 				m.moveSessionSelection(1)
 				return m, nil
 			}
-		case tea.KeyEnter:
-			if m.pending {
+			if m.showCommands {
+				m.moveCommandSelection(1)
 				return m, nil
 			}
+		case tea.KeyBackspace:
+			if m.focus == focusSessions && len(m.sessionFilter) > 0 {
+				m.sessionFilter = m.sessionFilter[:len(m.sessionFilter)-1]
+				m.selectedSession = 0
+				return m, nil
+			}
+		case tea.KeyEnter:
+			if m.showSplash {
+				m.showSplash = false
+				return m, nil
+			}
+
+			if m.showCommands {
+				// 执行选中的命令
+				filtered := m.filteredCommands()
+				if len(filtered) > 0 && m.selectedCommand < len(filtered) {
+					cmd := filtered[m.selectedCommand]
+					m.showCommands = false
+					m.commandFilter = ""
+					m.textarea.SetValue("/" + cmd.Name + " ")
+				}
+				return m, nil
+			}
+
 			if m.focus == focusSessions {
 				m.activateSelectedSession()
 				return m, nil
 			}
+
 			text := strings.TrimSpace(m.textarea.Value())
 			if text == "" {
 				return m, nil
 			}
 			m.textarea.Reset()
 			m.lastError = ""
+
+			// 检查是否是命令
+			if strings.HasPrefix(text, "/") {
+				cmdName, args := parseCommand(text)
+				if cmd := findCommand(cmdName); cmd != nil {
+					result, err := cmd.Handler(&m, args)
+					if err != nil {
+						m.appendLine("system", "Error: "+err.Error())
+					} else if result == "__QUIT__" {
+						return m, tea.Quit
+					} else if result == "__RELOAD__" {
+						return m, loadBootCmd(m.opts)
+					} else if result != "" {
+						m.appendLine("system", result)
+					}
+					m.updateViewport()
+					return m, nil
+				}
+				m.appendLine("system", "Unknown command: "+cmdName+". Type /help for list.")
+				m.updateViewport()
+				return m, nil
+			}
+
+			// 发送消息（带队列支持）
+			if m.pending {
+				// 加入队列而不是丢弃
+				m.messageQueue = append(m.messageQueue, text)
+				m.appendLine("system", fmt.Sprintf("[Queued #%d] %s", len(m.messageQueue), text))
+				m.updateViewport()
+				return m, nil
+			}
+
 			m.pending = true
 			m.appendLine("user", text)
 			m.history = append(m.history, agent.ChatMessage{Role: "user", Content: text})
@@ -292,6 +400,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.spinner.Tick)
 			return m, tea.Batch(cmds...)
 		}
+
+		// 检测 / 字符开启命令模式
+		if m.focus == focusInput && msg.Type == tea.KeyRunes {
+			text := m.textarea.Value()
+			if text == "" && msg.String() == "/" {
+				m.showCommands = true
+				m.commandFilter = ""
+				m.selectedCommand = 0
+			} else if m.showCommands && strings.HasPrefix(text, "/") {
+				m.commandFilter = strings.TrimPrefix(text, "/")
+				m.selectedCommand = 0
+			}
+		}
+
 		if m.focus == focusSessions && msg.Type == tea.KeyRunes {
 			typed := strings.TrimSpace(msg.String())
 			if typed != "" {
@@ -302,11 +424,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Update focused component.
+	// Update focused component
 	if m.focus == focusInput {
 		var tiCmd tea.Cmd
 		m.textarea, tiCmd = m.textarea.Update(msg)
 		cmds = append(cmds, tiCmd)
+
+		// 更新命令过滤
+		if m.showCommands {
+			text := m.textarea.Value()
+			if strings.HasPrefix(text, "/") {
+				m.commandFilter = strings.TrimPrefix(text, "/")
+			} else {
+				m.showCommands = false
+			}
+		}
 	}
 	var vpCmd tea.Cmd
 	m.viewport, vpCmd = m.viewport.Update(msg)
@@ -315,215 +447,277 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// View renders the TUI.
+// View renders the TUI
 func (m Model) View() string {
 	if !m.ready {
-		return "\n  Booting HighClaw TUI..."
+		return "\n  Loading HighClaw..."
+	}
+
+	if m.showSplash {
+		return m.renderSplash()
 	}
 
 	header := m.renderHeader()
 	body := m.renderBody()
 	input := m.renderInput()
-	status := m.renderStatus()
+	footer := m.renderFooter()
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, input, status)
+	return lipgloss.JoinVertical(lipgloss.Left, header, body, input, footer)
+}
+
+func (m *Model) renderSplash() string {
+	logo := RenderFullLogo()
+	hint := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("\n\n    Press Enter to continue...")
+
+	content := logo + hint
+
+	// 居中显示
+	style := lipgloss.NewStyle().
+		Width(m.width).
+		Height(m.height).
+		Align(lipgloss.Center, lipgloss.Center)
+
+	return style.Render(content)
 }
 
 func (m *Model) renderHeader() string {
-	accent := lipgloss.Color("45")
 	dim := lipgloss.Color("240")
+	accent := lipgloss.Color("226")
 	bright := lipgloss.Color("252")
 
-	logo := lipgloss.NewStyle().Bold(true).Foreground(accent).Render("⚡ HIGHCLAW")
-	ver := lipgloss.NewStyle().Foreground(dim).Render(" v0.1 ")
-	pipe := lipgloss.NewStyle().Foreground(dim).Render("│")
+	// 左侧：Logo 和 session
+	logo := lipgloss.NewStyle().Bold(true).Foreground(accent).Render(miniLogo)
 
 	sessionLabel := lastSegment(m.currentSession)
 	if len(sessionLabel) > 20 {
 		sessionLabel = sessionLabel[:19] + "…"
 	}
-	info := lipgloss.NewStyle().Foreground(bright).Render(
-		fmt.Sprintf(" %s %s session:%s %s model:%s",
-			pipe, m.opts.Agent, sessionLabel, pipe, m.cfg.Agent.Model),
-	)
+
+	sep := lipgloss.NewStyle().Foreground(dim).Render(" │ ")
+
+	sessionInfo := lipgloss.NewStyle().Foreground(bright).Render(sessionLabel)
+	modelInfo := lipgloss.NewStyle().Foreground(lipgloss.Color("45")).Render(m.cfg.Agent.Model)
+
+	// 右侧：Token 和状态
+	tokenInfo := lipgloss.NewStyle().Foreground(dim).Render(
+		fmt.Sprintf("%d tokens", m.tokenUsage.input+m.tokenUsage.output))
 
 	netIcon := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("●")
 	if m.reachable {
 		netIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render("●")
 	}
 
-	head := lipgloss.JoinHorizontal(lipgloss.Center, logo, ver, info, " ", netIcon)
-	bar := lipgloss.NewStyle().Foreground(dim).Render(strings.Repeat("━", max(10, m.width-2)))
-	return lipgloss.NewStyle().Padding(0, 1).Width(m.width).
-		Render(lipgloss.JoinVertical(lipgloss.Left, head, bar))
+	left := lipgloss.JoinHorizontal(lipgloss.Center, logo, sep, sessionInfo, sep, modelInfo)
+	right := lipgloss.JoinHorizontal(lipgloss.Center, tokenInfo, " ", netIcon)
+
+	// 计算中间空白
+	leftWidth := lipgloss.Width(left)
+	rightWidth := lipgloss.Width(right)
+	gap := m.width - leftWidth - rightWidth - 4
+	if gap < 1 {
+		gap = 1
+	}
+
+	headerLine := left + strings.Repeat(" ", gap) + right
+	border := lipgloss.NewStyle().Foreground(accent).Render(strings.Repeat("─", m.width-2))
+
+	return lipgloss.NewStyle().Padding(0, 1).Render(headerLine + "\n" + border)
 }
 
 func (m *Model) renderBody() string {
-	sidebarWidth := max(sidebarMinWidth, m.width/4)
-	mainWidth := max(20, m.width-sidebarWidth-4)
-	bodyHeight := max(8, m.height-inputHeight-6)
+	mainWidth := m.width - sidebarWidth - 5
+	bodyHeight := m.height - inputHeight - headerHeight - footerHeight - 4
 
 	borderColor := lipgloss.Color("238")
-	accentBorder := lipgloss.Color("62")
+	accentBorder := lipgloss.Color("226")
 
-	sidebarBorder := lipgloss.Border{
-		Top: "─", Bottom: "─", Left: "│", Right: "│",
-		TopLeft: "┌", TopRight: "┬", BottomLeft: "└", BottomRight: "┴",
-	}
-	mainBorder := lipgloss.Border{
-		Top: "─", Bottom: "─", Left: "│", Right: "│",
-		TopLeft: "┬", TopRight: "┐", BottomLeft: "┴", BottomRight: "┘",
-	}
-
+	// Sidebar
 	sidebarStyle := lipgloss.NewStyle().
 		Width(sidebarWidth).
 		Height(bodyHeight).
-		Border(sidebarBorder).
+		Border(lipgloss.RoundedBorder()).
 		BorderForeground(accentBorder).
 		Padding(0, 1)
 
+	// Main chat area
 	mainStyle := lipgloss.NewStyle().
 		Width(mainWidth).
 		Height(bodyHeight).
-		Border(mainBorder).
+		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor).
 		Padding(0, 1)
 
-	sidebar := sidebarStyle.Render(m.renderSessions())
+	sidebar := sidebarStyle.Render(m.renderSidebar())
 	main := mainStyle.Render(m.viewport.View())
-	return lipgloss.JoinHorizontal(lipgloss.Top, sidebar, main)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, sidebar, " ", main)
 }
 
-func (m *Model) renderSessions() string {
+func (m *Model) renderSidebar() string {
 	var b strings.Builder
-	accent := lipgloss.Color("45")
+	accent := lipgloss.Color("226")
 	dim := lipgloss.Color("240")
 	bright := lipgloss.Color("252")
 
+	// Sessions title
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(accent)
 	if m.focus == focusSessions {
-		titleStyle = titleStyle.Background(lipgloss.Color("236"))
+		titleStyle = titleStyle.Underline(true)
 	}
-	b.WriteString(titleStyle.Render(" ⚡ Sessions "))
+	b.WriteString(titleStyle.Render("⚡ Sessions"))
 
-	filterText := strings.TrimSpace(m.sessionFilter)
-	if filterText != "" {
-		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("111")).Render(" 🔍 "+filterText))
+	// Token summary
+	b.WriteString("\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(dim).Render(
+		fmt.Sprintf("   %d in / %d out", m.tokenUsage.input, m.tokenUsage.output)))
+
+	// Divider
+	b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render(strings.Repeat("─", sidebarWidth-4)))
+
+	if m.sessionFilter != "" {
+		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("111")).Render("🔍 "+m.sessionFilter))
 	}
-	b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render(strings.Repeat("─", sidebarMinWidth-4)))
 
 	visible := m.filteredSessions()
 	if len(visible) == 0 {
-		b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render(" (empty)"))
+		b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render(" (no sessions)"))
 		return b.String()
 	}
-	limit := len(visible)
-	if limit > 20 {
-		limit = 20
-	}
-	shown := visible[:limit]
-	groups := []struct {
-		title string
-		icon  string
-		id    string
-	}{
-		{title: "CLI", icon: "▸", id: "cli"},
-		{title: "TUI", icon: "▸", id: "tui"},
-		{title: "OTHER", icon: "▸", id: "other"},
-	}
-	for _, g := range groups {
-		groupHas := false
-		for i, s := range shown {
-			if sessionGroupID(s) != g.id {
-				continue
-			}
-			if !groupHas {
-				groupLabel := lipgloss.NewStyle().Foreground(dim).Bold(true).Render(g.icon + " " + g.title)
-				b.WriteString("\n" + groupLabel)
-				groupHas = true
-			}
-			isCurrent := s.Key == m.currentSession
-			isSelected := i == m.selectedSession
 
-			prefix := "  "
-			style := lipgloss.NewStyle().Foreground(bright)
-			if isSelected && m.focus == focusSessions {
-				prefix = "▶ "
-				style = lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Bold(true).Background(lipgloss.Color("236"))
-			} else if isCurrent {
-				prefix = "● "
-				style = lipgloss.NewStyle().Foreground(accent)
-			}
-			label := s.Label
-			if label == "" {
-				label = s.Key
-			}
-			meta := fmt.Sprintf("%s · %s", shortSession(label, 20), relativeTime(s.UpdatedAt))
-			b.WriteString("\n" + style.Render(prefix+meta))
+	limit := min(len(visible), 15)
+	for i := 0; i < limit; i++ {
+		s := visible[i]
+		isCurrent := s.Key == m.currentSession
+		isSelected := i == m.selectedSession
+
+		prefix := "  "
+		style := lipgloss.NewStyle().Foreground(bright)
+
+		if isSelected && m.focus == focusSessions {
+			prefix = "▶ "
+			style = lipgloss.NewStyle().Foreground(accent).Bold(true)
+		} else if isCurrent {
+			prefix = "● "
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("45"))
 		}
+
+		label := shortSession(s.Key, 20)
+		meta := relativeTime(s.UpdatedAt)
+		b.WriteString("\n" + style.Render(prefix+label))
+		b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render("    "+meta))
 	}
+
 	if len(visible) > limit {
-		b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render(fmt.Sprintf(" +%d more", len(visible)-limit)))
+		b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render(
+			fmt.Sprintf(" +%d more", len(visible)-limit)))
 	}
+
 	return b.String()
 }
 
 func (m *Model) renderInput() string {
-	label := " ✏ Input"
-	labelColor := lipgloss.Color("111")
+	accent := lipgloss.Color("226")
+	dim := lipgloss.Color("240")
+
+	// Input label
+	label := "Message"
+	labelColor := lipgloss.Color("252")
+
 	if m.pending {
-		label = " ⏳ " + m.spinner.View() + " Thinking..."
-		labelColor = lipgloss.Color("214")
+		label = m.spinner.View() + " Thinking..."
+		labelColor = accent
+		if len(m.messageQueue) > 0 {
+			label += fmt.Sprintf(" (%d queued)", len(m.messageQueue))
+		}
 	}
-	inputBorder := lipgloss.Border{
-		Top: "─", Bottom: "─", Left: "│", Right: "│",
-		TopLeft: "├", TopRight: "┤", BottomLeft: "└", BottomRight: "┘",
-	}
-	box := lipgloss.NewStyle().
-		Border(inputBorder).
+
+	labelStr := lipgloss.NewStyle().Bold(true).Foreground(labelColor).Render(label)
+	hint := lipgloss.NewStyle().Foreground(dim).Render(" (/ for commands)")
+
+	inputBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("238")).
 		Padding(0, 1).
-		Width(max(20, m.width-2))
-	return box.Render(lipgloss.NewStyle().Bold(true).Foreground(labelColor).Render(label) + "\n" + m.textarea.View())
+		Width(m.width - 4)
+
+	content := labelStr + hint + "\n" + m.textarea.View()
+
+	// 显示命令列表
+	if m.showCommands {
+		content += "\n" + m.renderCommandList()
+	}
+
+	return inputBox.Render(content)
 }
 
-func (m *Model) renderStatus() string {
+func (m *Model) renderCommandList() string {
+	filtered := m.filteredCommands()
+	if len(filtered) == 0 {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("  No matching commands")
+	}
+
+	var b strings.Builder
+	limit := min(len(filtered), 8)
+
+	for i := 0; i < limit; i++ {
+		cmd := filtered[i]
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+		prefix := "  "
+
+		if i == m.selectedCommand {
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Bold(true)
+			prefix = "▶ "
+		}
+
+		desc := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(" - " + cmd.Description)
+		b.WriteString(style.Render(prefix+"/"+cmd.Name) + desc + "\n")
+	}
+
+	return b.String()
+}
+
+func (m *Model) renderFooter() string {
 	dim := lipgloss.Color("240")
-	bright := lipgloss.Color("250")
 
-	netIcon := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗")
-	netLabel := "offline"
-	if m.reachable {
-		netIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render("✓")
-		netLabel = "online"
-	}
-
-	errText := ""
+	// Left: error or RTT
+	var left string
 	if m.lastError != "" {
-		errText = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(" │ " + m.lastError)
-	}
-	rtt := ""
-	if m.lastRTT > 0 {
-		rtt = lipgloss.NewStyle().Foreground(dim).Render(fmt.Sprintf(" │ %s", m.lastRTT.Round(time.Millisecond)))
+		left = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗ " + truncStr(m.lastError, 40))
+	} else if m.lastRTT > 0 {
+		left = lipgloss.NewStyle().Foreground(dim).Render(fmt.Sprintf("⏱ %s", m.lastRTT.Round(time.Millisecond)))
 	}
 
-	line1 := lipgloss.NewStyle().Foreground(bright).Render(
-		fmt.Sprintf(" %s %s │ %s │ %s", netIcon, netLabel, m.currentSession, m.cfg.Agent.Model),
-	)
-	kb := lipgloss.NewStyle().Foreground(dim).Render(
-		" Tab:focus  ↑↓:nav  Enter:send  Ctrl+N:new  Ctrl+R:reload  Ctrl+C:quit",
-	)
-	return lipgloss.NewStyle().Padding(0, 0).
-		Render(line1 + rtt + errText + "\n" + kb)
+	// Right: keyboard hints
+	hints := []string{
+		"Tab:focus",
+		"Ctrl+N:new",
+		"Ctrl+L:clear",
+		"/help",
+	}
+	right := lipgloss.NewStyle().Foreground(dim).Render(strings.Join(hints, " │ "))
+
+	leftWidth := lipgloss.Width(left)
+	rightWidth := lipgloss.Width(right)
+	gap := m.width - leftWidth - rightWidth - 4
+	if gap < 1 {
+		gap = 1
+	}
+
+	return lipgloss.NewStyle().Padding(0, 1).Render(left + strings.Repeat(" ", gap) + right)
 }
 
 func (m *Model) resize() {
-	sidebarWidth := max(sidebarMinWidth, m.width/4)
-	mainWidth := max(20, m.width-sidebarWidth-7)
-	mainHeight := max(8, m.height-inputHeight-10)
+	mainWidth := m.width - sidebarWidth - 10
+	mainHeight := m.height - inputHeight - headerHeight - footerHeight - 8
+	if mainWidth < 20 {
+		mainWidth = 20
+	}
+	if mainHeight < 5 {
+		mainHeight = 5
+	}
 	m.viewport.Width = mainWidth
 	m.viewport.Height = mainHeight
-	m.textarea.SetWidth(max(20, m.width-8))
+	m.textarea.SetWidth(m.width - 10)
 }
 
 func (m *Model) appendLine(role, content string) {
@@ -540,30 +734,41 @@ func (m *Model) updateViewport() {
 	}
 	var b strings.Builder
 	dim := lipgloss.Color("240")
+
 	for i, line := range m.lines {
 		stamp := lipgloss.NewStyle().Foreground(dim).Render(line.Timestamp.Format("15:04"))
-		roleIcon := "│"
-		roleStyle := lipgloss.NewStyle().Bold(true)
+
+		var roleIcon string
+		var roleStyle lipgloss.Style
+
 		switch line.Role {
 		case "user":
 			roleIcon = "▸"
-			roleStyle = roleStyle.Foreground(lipgloss.Color("81"))
+			roleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
 		case "assistant":
 			roleIcon = "◂"
-			roleStyle = roleStyle.Foreground(lipgloss.Color("205"))
+			roleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
 		default:
 			roleIcon = "─"
-			roleStyle = roleStyle.Foreground(lipgloss.Color("214"))
+			roleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("226"))
 		}
-		header := fmt.Sprintf(" %s %s %s", stamp, roleStyle.Render(roleIcon+" "+strings.ToUpper(line.Role)), "")
-		b.WriteString(header)
-		b.WriteString("\n")
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Padding(0, 3).Render(line.Content))
+
+		header := fmt.Sprintf(" %s %s %s", stamp, roleStyle.Render(roleIcon), roleStyle.Render(strings.ToUpper(line.Role)))
+		b.WriteString(header + "\n")
+
+		// Content with wrapping
+		content := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252")).
+			Width(m.viewport.Width - 4).
+			Render(line.Content)
+		b.WriteString("   " + content)
+
 		if i < len(m.lines)-1 {
-			b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render(strings.Repeat("·", max(10, m.viewport.Width-6))))
+			b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render(strings.Repeat("·", min(m.viewport.Width-6, 60))))
 		}
 		b.WriteString("\n")
 	}
+
 	m.viewport.SetContent(strings.TrimRight(b.String(), "\n"))
 	m.viewport.GotoBottom()
 }
@@ -576,7 +781,7 @@ func (m *Model) startNewSession() {
 	_ = session.SetCurrent(newKey)
 	m.sessionFilter = ""
 	m.selectedSession = 0
-	m.appendLine("system", "Started new session: "+newKey)
+	m.appendLine("system", "New session: "+newKey)
 	m.persistCurrentSession()
 	m.updateViewport()
 }
@@ -584,7 +789,6 @@ func (m *Model) startNewSession() {
 func (m *Model) moveSessionSelection(delta int) {
 	visible := m.filteredSessions()
 	if len(visible) == 0 {
-		m.selectedSession = 0
 		return
 	}
 	m.selectedSession += delta
@@ -594,6 +798,41 @@ func (m *Model) moveSessionSelection(delta int) {
 	if m.selectedSession >= len(visible) {
 		m.selectedSession = len(visible) - 1
 	}
+}
+
+func (m *Model) moveCommandSelection(delta int) {
+	filtered := m.filteredCommands()
+	if len(filtered) == 0 {
+		return
+	}
+	m.selectedCommand += delta
+	if m.selectedCommand < 0 {
+		m.selectedCommand = 0
+	}
+	if m.selectedCommand >= len(filtered) {
+		m.selectedCommand = len(filtered) - 1
+	}
+}
+
+func (m *Model) filteredCommands() []Command {
+	if m.commandFilter == "" {
+		return getBuiltinCommands()
+	}
+	filter := strings.ToLower(m.commandFilter)
+	var result []Command
+	for _, cmd := range getBuiltinCommands() {
+		if strings.HasPrefix(cmd.Name, filter) {
+			result = append(result, cmd)
+			continue
+		}
+		for _, alias := range cmd.Aliases {
+			if strings.HasPrefix(alias, filter) {
+				result = append(result, cmd)
+				break
+			}
+		}
+	}
+	return result
 }
 
 func (m *Model) activateSelectedSession() {
@@ -613,7 +852,7 @@ func (m *Model) loadCurrentSession() {
 	m.lines = nil
 	sess, err := session.Load(m.currentSession)
 	if err != nil {
-		m.appendLine("system", fmt.Sprintf("Switched session: %s", m.currentSession))
+		m.appendLine("system", fmt.Sprintf("Session: %s", m.currentSession))
 		return
 	}
 	for _, msg := range sess.Messages() {
@@ -626,17 +865,13 @@ func (m *Model) loadCurrentSession() {
 		if role == "" || content == "" {
 			continue
 		}
-		m.lines = append(m.lines, chatLine{
-			Role:      role,
-			Content:   content,
-			Timestamp: ts,
-		})
+		m.lines = append(m.lines, chatLine{Role: role, Content: content, Timestamp: ts})
 		if role == "user" || role == "assistant" || role == "system" {
 			m.history = append(m.history, agent.ChatMessage{Role: role, Content: content})
 		}
 	}
 	if len(m.lines) == 0 {
-		m.appendLine("system", fmt.Sprintf("Switched session: %s", m.currentSession))
+		m.appendLine("system", fmt.Sprintf("Session: %s", m.currentSession))
 	}
 }
 
@@ -688,7 +923,12 @@ func sendMessageCmd(runner *agent.Runner, sessionKey string, history []agent.Cha
 		if err != nil {
 			return assistantMsg{Err: err, Duration: time.Since(start)}
 		}
-		return assistantMsg{Reply: resp.Reply, Duration: time.Since(start)}
+		return assistantMsg{
+			Reply:        resp.Reply,
+			Duration:     time.Since(start),
+			InputTokens:  resp.TokensUsed.InputTokens,
+			OutputTokens: resp.TokensUsed.OutputTokens,
+		}
 	}
 }
 
@@ -696,7 +936,6 @@ func loadSessionIndex(agentID string) ([]sessionEntry, error) {
 	entries := make([]sessionEntry, 0, 64)
 	byKey := map[string]sessionEntry{}
 
-	// Merge HighClaw session files.
 	if local, err := session.LoadAll(); err == nil {
 		for _, s := range local {
 			e := sessionEntry{
@@ -780,24 +1019,11 @@ func (m *Model) filteredSessions() []sessionEntry {
 	out := make([]sessionEntry, 0, len(m.sessions))
 	for _, s := range m.sessions {
 		if strings.Contains(strings.ToLower(s.Key), q) ||
-			strings.Contains(strings.ToLower(s.Label), q) ||
-			strings.Contains(strings.ToLower(s.Channel), q) {
+			strings.Contains(strings.ToLower(s.Label), q) {
 			out = append(out, s)
 		}
 	}
 	return out
-}
-
-func sessionGroupID(s sessionEntry) string {
-	ch := strings.ToLower(strings.TrimSpace(s.Channel))
-	key := strings.ToLower(s.Key)
-	if ch == "cli" || strings.Contains(key, ":cli-") {
-		return "cli"
-	}
-	if ch == "tui" {
-		return "tui"
-	}
-	return "other"
 }
 
 func (m *Model) upsertSessionEntry(e sessionEntry) {
@@ -817,11 +1043,12 @@ func (m *Model) upsertSessionEntry(e sessionEntry) {
 }
 
 func shortSession(s string, maxLen int) string {
+	parts := strings.Split(s, ":")
+	if len(parts) > 0 {
+		s = parts[len(parts)-1]
+	}
 	if len(s) <= maxLen {
 		return s
-	}
-	if maxLen <= 1 {
-		return s[:1]
 	}
 	return s[:maxLen-1] + "…"
 }
@@ -851,19 +1078,19 @@ func lastSegment(s string) string {
 	return parts[len(parts)-1]
 }
 
-func max(a, b int) int {
-	if a > b {
+func min(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b
 }
 
-// Run starts the TUI with default options.
+// Run starts the TUI with default options
 func Run() error {
 	return RunWithOptions(Options{})
 }
 
-// RunWithOptions starts the TUI with custom options.
+// RunWithOptions starts the TUI with custom options
 func RunWithOptions(opts Options) error {
 	p := tea.NewProgram(
 		NewModel(opts),
