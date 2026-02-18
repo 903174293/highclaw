@@ -20,7 +20,7 @@ type SecurityPolicy struct {
 func NewSecurityPolicy(cfg *config.Config) *SecurityPolicy {
 	allowed := map[string]struct{}{}
 	// Mirror ZeroClaw defaults: 允许常用的文件和开发命令
-	list := []string{
+	defaultCommands := []string{
 		// 基础文件操作
 		"ls", "cat", "grep", "find", "echo", "pwd", "wc", "head", "tail",
 		"mkdir", "touch", "cp", "mv", "rm", "chmod", "chown", "stat",
@@ -36,22 +36,34 @@ func NewSecurityPolicy(cfg *config.Config) *SecurityPolicy {
 		// 其他常用
 		"cd", "basename", "dirname", "realpath", "du", "df",
 	}
-	// Merge user-defined entries instead of replacing baseline, because some
-	// existing configs store tool ids here (e.g. "bash"), not OS command names.
-	list = append(list, cfg.Agent.Sandbox.Allow...)
-	for _, cmd := range list {
-		cmd = strings.TrimSpace(cmd)
-		if cmd != "" {
+
+	// 合并命令白名单：默认 + sandbox.allow + autonomy.allowedCommands
+	for _, cmd := range defaultCommands {
+		allowed[cmd] = struct{}{}
+	}
+	for _, cmd := range cfg.Agent.Sandbox.Allow {
+		if cmd = strings.TrimSpace(cmd); cmd != "" {
 			allowed[cmd] = struct{}{}
 		}
 	}
+	for _, cmd := range cfg.Autonomy.AllowedCommands {
+		if cmd = strings.TrimSpace(cmd); cmd != "" {
+			allowed[cmd] = struct{}{}
+		}
+	}
+
 	autonomy := strings.ToLower(strings.TrimSpace(cfg.Autonomy.Level))
 	if autonomy == "" {
 		autonomy = "supervised"
 	}
-	// 与 ZeroClaw 保持一致：默认允许访问绝对路径，但高风险操作需要 approval
-	// workspaceOnly 可以通过配置 sandbox.mode = "workspace-only" 启用
-	workspaceOnly := strings.ToLower(strings.TrimSpace(cfg.Agent.Sandbox.Mode)) == "workspace-only"
+
+	// 与 ZeroClaw 保持一致：workspaceOnly 默认为 true
+	// 可通过 autonomy.workspaceOnly: false 允许访问绝对路径
+	workspaceOnly := true
+	if cfg.Autonomy.WorkspaceOnly != nil {
+		workspaceOnly = *cfg.Autonomy.WorkspaceOnly
+	}
+
 	return &SecurityPolicy{
 		autonomy:                 autonomy,
 		allowed:                  allowed,

@@ -63,8 +63,17 @@ type ObservabilityConfig struct{}
 
 type IdentityConfig struct{}
 
+// AutonomyConfig 控制 Agent 的自主权限，与 ZeroClaw 保持一致
 type AutonomyConfig struct {
+	// Level 自主级别: "readonly" | "supervised" | "full"
 	Level string `json:"level"`
+	// WorkspaceOnly 是否限制在工作区目录内（默认 true）
+	// 设为 false 可允许访问绝对路径（如 ~/Desktop）
+	WorkspaceOnly *bool `json:"workspaceOnly,omitempty"`
+	// AllowedCommands 允许执行的命令白名单（追加到默认列表）
+	AllowedCommands []string `json:"allowedCommands,omitempty"`
+	// ForbiddenPaths 禁止访问的路径（即使 workspaceOnly=false）
+	ForbiddenPaths []string `json:"forbiddenPaths,omitempty"`
 }
 
 type ComposioConfig struct {
