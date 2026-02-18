@@ -3,57 +3,44 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
-// 闪电边框
-const lightningBorder = "⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡"
-
-// HighClaw 主 Logo
-const mainLogo = `
-    ██╗  ██╗██╗ ██████╗ ██╗  ██╗ ██████╗██╗      █████╗ ██╗    ██╗
-    ██║  ██║██║██╔════╝ ██║  ██║██╔════╝██║     ██╔══██╗██║    ██║
-    ███████║██║██║  ███╗███████║██║     ██║     ███████║██║ █╗ ██║
-    ██╔══██║██║██║   ██║██╔══██║██║     ██║     ██╔══██║██║███╗██║
-    ██║  ██║██║╚██████╔╝██║  ██║╚██████╗███████╗██║  ██║╚███╔███╔╝
-    ╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝ `
-
-// 标语
-const tagline = "    High performance. Built for speed and reliability. 100% Go 100% Agnostic."
-
-// 小型 Logo
-const miniLogo = "⚡ HighClaw"
-
-// Logo 样式
-var (
-	logoStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("45")).
-			Bold(true)
-
-	borderStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("226"))
-
-	taglineStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("250")).
-			Italic(true)
-)
-
-// RenderFullLogo 渲染完整的带边框 Logo
-func RenderFullLogo() string {
-	return borderStyle.Render(lightningBorder) + "\n" +
-		logoStyle.Render(mainLogo) + "\n\n" +
-		taglineStyle.Render(tagline) + "\n\n" +
-		borderStyle.Render(lightningBorder)
+// HighClaw Logo 像素字（仿 OpenCode 风格）
+// 使用 _ ^ ~ 作为阴影标记
+var logoLeft = []string{
+	"                          ",
+	"█▀▀█ ▀ █▀▀▀ █▀▀█ █▀▀▀ █   ",
+	"█__█ █ █___ █__█ █___ █__ ",
+	"▀▀▀▀ ▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀ ",
 }
 
-// RenderLogo 渲染主 Logo（不带边框）
-func RenderLogo() string {
-	return logoStyle.Render(mainLogo)
+var logoRight = []string{
+	"                    ",
+	" █▀▀█ █   █▀▀█ █   █",
+	" █___ █__ █__█ █ █ █",
+	" ▀▀▀▀ ▀▀▀ ▀▀▀▀ ▀▀▀▀▀",
 }
 
-// RenderMiniLogo 渲染小型 Logo
-func RenderMiniLogo() string {
-	return logoStyle.Render(miniLogo)
+// 渲染 Logo
+func renderLogo(width int) string {
+	theme := getTheme()
+	var result string
+
+	for i := range logoLeft {
+		left := lipgloss.NewStyle().Foreground(theme.textMuted).Render(logoLeft[i])
+		right := lipgloss.NewStyle().Foreground(theme.text).Bold(true).Render(logoRight[i])
+		line := left + " " + right
+		// 居中
+		padding := (width - lipgloss.Width(line)) / 2
+		if padding > 0 {
+			line = lipgloss.NewStyle().PaddingLeft(padding).Render(line)
+		}
+		result += line + "\n"
+	}
+	return result
 }
 
-// RenderBorder 渲染闪电边框
-func RenderBorder() string {
-	return borderStyle.Render(lightningBorder)
+// 小型 Logo（用于 header）
+func renderMiniLogo() string {
+	theme := getTheme()
+	return lipgloss.NewStyle().Foreground(theme.textMuted).Render("high") +
+		lipgloss.NewStyle().Foreground(theme.text).Bold(true).Render("claw")
 }

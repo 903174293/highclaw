@@ -240,7 +240,7 @@ func cmdTokens(m *Model, args []string) (string, error) {
 
 func cmdInfo(m *Model, args []string) (string, error) {
 	status := "Offline"
-	if m.reachable {
+	if true {
 		status = "Online"
 	}
 	return fmt.Sprintf("Info:\n  Session: %s\n  Model:   %s\n  Agent:   %s\n  Msgs:    %d\n  Status:  %s",

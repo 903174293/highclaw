@@ -5,8 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
-	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -23,22 +21,15 @@ import (
 	"github.com/highclaw/highclaw/internal/gateway/session"
 )
 
-const (
-	sidebarWidth = 42
-	inputHeight  = 3
-	headerHeight = 2
-	footerHeight = 2
-)
-
-type focusTarget int
+// 页面类型
+type pageType int
 
 const (
-	focusInput focusTarget = iota
-	focusSessions
-	focusCommands
+	pageHome    pageType = iota // 首页（显示 Logo）
+	pageSession                 // 会话页面
 )
 
-// Options configures TUI startup
+// Options 配置 TUI 启动参数
 type Options struct {
 	GatewayURL string
 	Agent      string
@@ -53,26 +44,21 @@ type chatLine struct {
 }
 
 type sessionEntry struct {
-	Key           string
-	Label         string
-	Channel       string
-	UpdatedAt     time.Time
-	ModelProvider string
-	Model         string
-	ContextTokens int
-	TotalTokens   int
+	Key       string
+	Label     string
+	Channel   string
+	UpdatedAt time.Time
+	Model     string
 }
 
-// tokenUsageInfo tracks token consumption
 type tokenUsageInfo struct {
 	input  int
 	output int
 }
 
 type bootMsg struct {
-	Sessions  []sessionEntry
-	Reachable bool
-	Err       error
+	Sessions []sessionEntry
+	Err      error
 }
 
 type assistantMsg struct {
@@ -83,7 +69,7 @@ type assistantMsg struct {
 	OutputTokens int
 }
 
-// Model represents the TUI state
+// Model 表示 TUI 状态
 type Model struct {
 	opts   Options
 	cfg    *config.Config
@@ -96,45 +82,29 @@ type Model struct {
 	history []agent.ChatMessage
 	lines   []chatLine
 
-	sessions        []sessionEntry
-	selectedSession int
-	currentSession  string
-	sessionFilter   string
+	sessions       []sessionEntry
+	currentSession string
 
 	width  int
 	height int
 	ready  bool
 
-	focus focusTarget
-
-	reachable  bool
-	pending    bool
-	lastError  string
-	lastRTT    time.Duration
-	tokenUsage tokenUsageInfo
-
-	// 消息队列（修复并发发送 bug）
+	page         pageType
+	pending      bool
+	lastError    string
+	lastRTT      time.Duration
+	tokenUsage   tokenUsageInfo
 	messageQueue []string
-
-	// 命令模式
-	showCommands    bool
-	commandFilter   string
-	selectedCommand int
-
-	// 启动画面
-	showSplash bool
+	interrupt    int // ESC 连按计数
 }
 
-// NewModel creates a new TUI model
+// NewModel 创建新的 TUI Model
 func NewModel(opts Options) Model {
 	if strings.TrimSpace(opts.Agent) == "" {
 		opts.Agent = "main"
 	}
 	if strings.TrimSpace(opts.Session) == "" {
 		opts.Session = "main"
-	}
-	if strings.TrimSpace(opts.GatewayURL) == "" {
-		opts.GatewayURL = "ws://127.0.0.1:18789"
 	}
 
 	cfg, err := config.Load()
@@ -147,24 +117,23 @@ func NewModel(opts Options) Model {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	ta := textarea.New()
-	ta.Placeholder = "Type message or /help for commands..."
+	ta.Placeholder = "Say anything... File a TODO in the codebase"
 	ta.Focus()
 	ta.CharLimit = 10000
-	ta.SetHeight(inputHeight)
+	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
+	ta.Prompt = ""
 
 	vp := viewport.New(80, 20)
 	vp.SetContent("")
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
-	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
+	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
 
 	initialSession := buildSessionKey(opts.Agent, opts.Session)
-	if strings.TrimSpace(opts.Session) == "" || strings.EqualFold(strings.TrimSpace(opts.Session), "main") {
-		if current, err := session.Current(); err == nil && strings.TrimSpace(current) != "" {
-			initialSession = strings.TrimSpace(current)
-		}
+	if current, err := session.Current(); err == nil && strings.TrimSpace(current) != "" {
+		initialSession = strings.TrimSpace(current)
 	}
 
 	return Model{
@@ -175,18 +144,17 @@ func NewModel(opts Options) Model {
 		viewport:       vp,
 		spinner:        sp,
 		currentSession: initialSession,
-		focus:          focusInput,
-		showSplash:     true,
+		page:           pageHome,
 		messageQueue:   make([]string, 0),
 	}
 }
 
-// Init initializes the TUI
+// Init 初始化 TUI
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(textarea.Blink, m.spinner.Tick, loadBootCmd(m.opts))
 }
 
-// Update handles messages and updates the model
+// Update 处理消息和更新状态
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -196,33 +164,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.ready = true
 		m.resize()
-		m.updateViewport()
 		return m, nil
 
 	case bootMsg:
-		m.showSplash = false
 		if msg.Err != nil {
 			m.lastError = msg.Err.Error()
 		}
-		m.reachable = msg.Reachable
 		if len(msg.Sessions) > 0 {
 			m.sessions = msg.Sessions
-			m.selectedSession = 0
-			if strings.TrimSpace(m.currentSession) == "" {
-				m.currentSession = msg.Sessions[0].Key
-			}
-			for i := range msg.Sessions {
-				if msg.Sessions[i].Key == m.currentSession {
-					m.selectedSession = i
-					break
-				}
-			}
 		}
 		m.loadCurrentSession()
-		if len(m.lines) == 0 {
-			m.appendLine("system", "Welcome to HighClaw! Type /help for commands.")
-		}
-		m.updateViewport()
 		return m, nil
 
 	case assistantMsg:
@@ -245,7 +196,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.updateViewport()
 
-		// 检查消息队列，处理下一条
+		// 处理队列中的下一条消息
 		if len(m.messageQueue) > 0 {
 			nextMsg := m.messageQueue[0]
 			m.messageQueue = m.messageQueue[1:]
@@ -268,97 +219,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// 处理全局快捷键
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			return m, tea.Quit
-		case tea.KeyEsc:
-			if m.showCommands {
-				m.showCommands = false
-				m.commandFilter = ""
-				return m, nil
-			}
-			if m.showSplash {
-				m.showSplash = false
-				return m, nil
-			}
-			return m, tea.Quit
-		case tea.KeyTab:
-			if m.showCommands {
-				m.showCommands = false
-				m.commandFilter = ""
-			}
-			if m.focus == focusInput {
-				m.focus = focusSessions
-				m.textarea.Blur()
-			} else {
-				m.focus = focusInput
-				m.textarea.Focus()
-			}
-			return m, nil
-		case tea.KeyCtrlN:
-			m.startNewSession()
-			return m, nil
-		case tea.KeyCtrlL:
-			m.lines = nil
-			m.history = nil
-			m.updateViewport()
-			return m, nil
-		case tea.KeyCtrlR:
-			return m, loadBootCmd(m.opts)
-		case tea.KeyUp:
-			if m.focus == focusSessions {
-				m.moveSessionSelection(-1)
-				return m, nil
-			}
-			if m.showCommands {
-				m.moveCommandSelection(-1)
-				return m, nil
-			}
-		case tea.KeyDown:
-			if m.focus == focusSessions {
-				m.moveSessionSelection(1)
-				return m, nil
-			}
-			if m.showCommands {
-				m.moveCommandSelection(1)
-				return m, nil
-			}
-		case tea.KeyBackspace:
-			if m.focus == focusSessions && len(m.sessionFilter) > 0 {
-				m.sessionFilter = m.sessionFilter[:len(m.sessionFilter)-1]
-				m.selectedSession = 0
-				return m, nil
-			}
-		case tea.KeyEnter:
-			if m.showSplash {
-				m.showSplash = false
-				return m, nil
-			}
 
-			if m.showCommands {
-				// 执行选中的命令
-				filtered := m.filteredCommands()
-				if len(filtered) > 0 && m.selectedCommand < len(filtered) {
-					cmd := filtered[m.selectedCommand]
-					m.showCommands = false
-					m.commandFilter = ""
-					m.textarea.SetValue("/" + cmd.Name + " ")
+		case tea.KeyEsc:
+			if m.pending {
+				m.interrupt++
+				if m.interrupt >= 2 {
+					// TODO: 实现中断逻辑
+					m.pending = false
+					m.interrupt = 0
+					m.appendLine("system", "Interrupted.")
+					m.updateViewport()
 				}
 				return m, nil
 			}
+			return m, tea.Quit
 
-			if m.focus == focusSessions {
-				m.activateSelectedSession()
-				return m, nil
-			}
+		case tea.KeyTab:
+			// TODO: 实现 agent 切换
+			return m, nil
 
+		case tea.KeyCtrlP:
+			// TODO: 实现命令面板
+			return m, nil
+
+		case tea.KeyEnter:
 			text := strings.TrimSpace(m.textarea.Value())
 			if text == "" {
 				return m, nil
 			}
 			m.textarea.Reset()
+			m.textarea.SetHeight(1)
 			m.lastError = ""
+			m.interrupt = 0
+
+			// 切换到会话页面
+			if m.page == pageHome {
+				m.page = pageSession
+			}
 
 			// 检查是否是命令
 			if strings.HasPrefix(text, "/") {
@@ -377,17 +277,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.updateViewport()
 					return m, nil
 				}
-				m.appendLine("system", "Unknown command: "+cmdName+". Type /help for list.")
+				m.appendLine("system", "Unknown command: "+cmdName)
 				m.updateViewport()
 				return m, nil
 			}
 
-			// 发送消息（带队列支持）
+			// 发送消息
 			if m.pending {
-				// 加入队列而不是丢弃
 				m.messageQueue = append(m.messageQueue, text)
-				m.appendLine("system", fmt.Sprintf("[Queued #%d] %s", len(m.messageQueue), text))
-				m.updateViewport()
 				return m, nil
 			}
 
@@ -400,324 +297,236 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.spinner.Tick)
 			return m, tea.Batch(cmds...)
 		}
-
-		// 检测 / 字符开启命令模式
-		if m.focus == focusInput && msg.Type == tea.KeyRunes {
-			text := m.textarea.Value()
-			if text == "" && msg.String() == "/" {
-				m.showCommands = true
-				m.commandFilter = ""
-				m.selectedCommand = 0
-			} else if m.showCommands && strings.HasPrefix(text, "/") {
-				m.commandFilter = strings.TrimPrefix(text, "/")
-				m.selectedCommand = 0
-			}
-		}
-
-		if m.focus == focusSessions && msg.Type == tea.KeyRunes {
-			typed := strings.TrimSpace(msg.String())
-			if typed != "" {
-				m.sessionFilter += typed
-				m.selectedSession = 0
-				return m, nil
-			}
-		}
 	}
 
-	// Update focused component
-	if m.focus == focusInput {
-		var tiCmd tea.Cmd
-		m.textarea, tiCmd = m.textarea.Update(msg)
-		cmds = append(cmds, tiCmd)
+	// 更新 textarea
+	var tiCmd tea.Cmd
+	m.textarea, tiCmd = m.textarea.Update(msg)
+	cmds = append(cmds, tiCmd)
 
-		// 更新命令过滤
-		if m.showCommands {
-			text := m.textarea.Value()
-			if strings.HasPrefix(text, "/") {
-				m.commandFilter = strings.TrimPrefix(text, "/")
-			} else {
-				m.showCommands = false
-			}
-		}
+	// 更新 viewport
+	if m.page == pageSession {
+		var vpCmd tea.Cmd
+		m.viewport, vpCmd = m.viewport.Update(msg)
+		cmds = append(cmds, vpCmd)
 	}
-	var vpCmd tea.Cmd
-	m.viewport, vpCmd = m.viewport.Update(msg)
-	cmds = append(cmds, vpCmd)
 
 	return m, tea.Batch(cmds...)
 }
 
-// View renders the TUI
+// View 渲染 TUI
 func (m Model) View() string {
 	if !m.ready {
-		return "\n  Loading HighClaw..."
+		return "\n  Loading..."
 	}
 
-	if m.showSplash {
-		return m.renderSplash()
+	switch m.page {
+	case pageHome:
+		return m.renderHomePage()
+	case pageSession:
+		return m.renderSessionPage()
+	default:
+		return m.renderHomePage()
 	}
-
-	header := m.renderHeader()
-	body := m.renderBody()
-	input := m.renderInput()
-	footer := m.renderFooter()
-
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, input, footer)
 }
 
-func (m *Model) renderSplash() string {
-	logo := RenderFullLogo()
-	hint := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("\n\n    Press Enter to continue...")
+// renderHomePage 渲染首页（显示 Logo）
+func (m *Model) renderHomePage() string {
+	theme := getTheme()
+	var content strings.Builder
 
-	content := logo + hint
+	// 上部空白
+	topPadding := (m.height - 15) / 2
+	if topPadding < 0 {
+		topPadding = 0
+	}
+	content.WriteString(strings.Repeat("\n", topPadding))
 
-	// 居中显示
-	style := lipgloss.NewStyle().
-		Width(m.width).
-		Height(m.height).
-		Align(lipgloss.Center, lipgloss.Center)
+	// Logo
+	content.WriteString(renderLogo(m.width))
+	content.WriteString("\n")
 
-	return style.Render(content)
+	// 输入框
+	inputWidth := min(75, m.width-4)
+	inputStyle := lipgloss.NewStyle().
+		Width(inputWidth).
+		Border(lipgloss.NormalBorder(), false, false, true, true).
+		BorderForeground(theme.primary).
+		PaddingLeft(1)
+
+	inputBox := inputStyle.Render(m.textarea.View())
+	// 居中
+	padding := (m.width - lipgloss.Width(inputBox)) / 2
+	if padding > 0 {
+		inputBox = lipgloss.NewStyle().PaddingLeft(padding).Render(inputBox)
+	}
+	content.WriteString(inputBox)
+	content.WriteString("\n")
+
+	// 下方提示
+	hints := lipgloss.NewStyle().Foreground(theme.textMuted).Render(
+		"tab agents  ctrl+p commands")
+	hintPadding := (m.width - lipgloss.Width(hints)) / 2
+	if hintPadding > 0 {
+		hints = lipgloss.NewStyle().PaddingLeft(hintPadding).Render(hints)
+	}
+	content.WriteString("\n")
+	content.WriteString(hints)
+
+	// Tips
+	tips := lipgloss.NewStyle().Foreground(theme.textMuted).Render(
+		"• Tip Run /compact to summarize long sessions near context limits")
+	tipPadding := (m.width - lipgloss.Width(tips)) / 2
+	if tipPadding > 0 {
+		tips = lipgloss.NewStyle().PaddingLeft(tipPadding).Render(tips)
+	}
+	content.WriteString("\n\n\n")
+	content.WriteString(tips)
+
+	// 填充剩余空间
+	currentHeight := strings.Count(content.String(), "\n") + 1
+	remaining := m.height - currentHeight - 3
+	if remaining > 0 {
+		content.WriteString(strings.Repeat("\n", remaining))
+	}
+
+	// 底部状态栏
+	content.WriteString(m.renderFooter())
+
+	return content.String()
 }
 
-func (m *Model) renderHeader() string {
-	dim := lipgloss.Color("240")
-	accent := lipgloss.Color("226")
-	bright := lipgloss.Color("252")
+// renderSessionPage 渲染会话页面
+func (m *Model) renderSessionPage() string {
+	theme := getTheme()
+	var content strings.Builder
 
-	// 左侧：Logo 和 session
-	logo := lipgloss.NewStyle().Bold(true).Foreground(accent).Render(miniLogo)
+	// Header
+	content.WriteString(m.renderSessionHeader())
+	content.WriteString("\n")
 
-	sessionLabel := lastSegment(m.currentSession)
-	if len(sessionLabel) > 20 {
-		sessionLabel = sessionLabel[:19] + "…"
+	// 聊天内容区域
+	chatHeight := m.height - 6 // header + input + footer
+	if chatHeight < 5 {
+		chatHeight = 5
 	}
+	m.viewport.Height = chatHeight
+	m.viewport.Width = m.width - 2
+	content.WriteString(lipgloss.NewStyle().PaddingLeft(1).Render(m.viewport.View()))
+	content.WriteString("\n")
 
-	sep := lipgloss.NewStyle().Foreground(dim).Render(" │ ")
+	// 输入框
+	inputStyle := lipgloss.NewStyle().
+		Width(m.width-4).
+		Border(lipgloss.NormalBorder(), false, false, true, true).
+		BorderForeground(theme.primary).
+		PaddingLeft(1)
 
-	sessionInfo := lipgloss.NewStyle().Foreground(bright).Render(sessionLabel)
-	modelInfo := lipgloss.NewStyle().Foreground(lipgloss.Color("45")).Render(m.cfg.Agent.Model)
-
-	// 右侧：Token 和状态
-	tokenInfo := lipgloss.NewStyle().Foreground(dim).Render(
-		fmt.Sprintf("%d tokens", m.tokenUsage.input+m.tokenUsage.output))
-
-	netIcon := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("●")
-	if m.reachable {
-		netIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render("●")
-	}
-
-	left := lipgloss.JoinHorizontal(lipgloss.Center, logo, sep, sessionInfo, sep, modelInfo)
-	right := lipgloss.JoinHorizontal(lipgloss.Center, tokenInfo, " ", netIcon)
-
-	// 计算中间空白
-	leftWidth := lipgloss.Width(left)
-	rightWidth := lipgloss.Width(right)
-	gap := m.width - leftWidth - rightWidth - 4
-	if gap < 1 {
-		gap = 1
-	}
-
-	headerLine := left + strings.Repeat(" ", gap) + right
-	border := lipgloss.NewStyle().Foreground(accent).Render(strings.Repeat("─", m.width-2))
-
-	return lipgloss.NewStyle().Padding(0, 1).Render(headerLine + "\n" + border)
-}
-
-func (m *Model) renderBody() string {
-	mainWidth := m.width - sidebarWidth - 5
-	bodyHeight := m.height - inputHeight - headerHeight - footerHeight - 4
-
-	borderColor := lipgloss.Color("238")
-	accentBorder := lipgloss.Color("226")
-
-	// Sidebar
-	sidebarStyle := lipgloss.NewStyle().
-		Width(sidebarWidth).
-		Height(bodyHeight).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(accentBorder).
-		Padding(0, 1)
-
-	// Main chat area
-	mainStyle := lipgloss.NewStyle().
-		Width(mainWidth).
-		Height(bodyHeight).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Padding(0, 1)
-
-	sidebar := sidebarStyle.Render(m.renderSidebar())
-	main := mainStyle.Render(m.viewport.View())
-
-	return lipgloss.JoinHorizontal(lipgloss.Top, sidebar, " ", main)
-}
-
-func (m *Model) renderSidebar() string {
-	var b strings.Builder
-	accent := lipgloss.Color("226")
-	dim := lipgloss.Color("240")
-	bright := lipgloss.Color("252")
-
-	// Sessions title
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(accent)
-	if m.focus == focusSessions {
-		titleStyle = titleStyle.Underline(true)
-	}
-	b.WriteString(titleStyle.Render("⚡ Sessions"))
-
-	// Token summary
-	b.WriteString("\n")
-	b.WriteString(lipgloss.NewStyle().Foreground(dim).Render(
-		fmt.Sprintf("   %d in / %d out", m.tokenUsage.input, m.tokenUsage.output)))
-
-	// Divider
-	b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render(strings.Repeat("─", sidebarWidth-4)))
-
-	if m.sessionFilter != "" {
-		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("111")).Render("🔍 "+m.sessionFilter))
-	}
-
-	visible := m.filteredSessions()
-	if len(visible) == 0 {
-		b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render(" (no sessions)"))
-		return b.String()
-	}
-
-	limit := min(len(visible), 15)
-	for i := 0; i < limit; i++ {
-		s := visible[i]
-		isCurrent := s.Key == m.currentSession
-		isSelected := i == m.selectedSession
-
-		prefix := "  "
-		style := lipgloss.NewStyle().Foreground(bright)
-
-		if isSelected && m.focus == focusSessions {
-			prefix = "▶ "
-			style = lipgloss.NewStyle().Foreground(accent).Bold(true)
-		} else if isCurrent {
-			prefix = "● "
-			style = lipgloss.NewStyle().Foreground(lipgloss.Color("45"))
-		}
-
-		label := shortSession(s.Key, 20)
-		meta := relativeTime(s.UpdatedAt)
-		b.WriteString("\n" + style.Render(prefix+label))
-		b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render("    "+meta))
-	}
-
-	if len(visible) > limit {
-		b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render(
-			fmt.Sprintf(" +%d more", len(visible)-limit)))
-	}
-
-	return b.String()
-}
-
-func (m *Model) renderInput() string {
-	accent := lipgloss.Color("226")
-	dim := lipgloss.Color("240")
-
-	// Input label
-	label := "Message"
-	labelColor := lipgloss.Color("252")
-
+	// 显示 spinner 或输入框
+	var inputContent string
 	if m.pending {
-		label = m.spinner.View() + " Thinking..."
-		labelColor = accent
+		inputContent = m.spinner.View() + " Thinking..."
 		if len(m.messageQueue) > 0 {
-			label += fmt.Sprintf(" (%d queued)", len(m.messageQueue))
+			inputContent += fmt.Sprintf(" (%d queued)", len(m.messageQueue))
 		}
+	} else {
+		inputContent = m.textarea.View()
 	}
+	content.WriteString(lipgloss.NewStyle().PaddingLeft(1).Render(inputStyle.Render(inputContent)))
+	content.WriteString("\n")
 
-	labelStr := lipgloss.NewStyle().Bold(true).Foreground(labelColor).Render(label)
-	hint := lipgloss.NewStyle().Foreground(dim).Render(" (/ for commands)")
+	// 底部状态栏
+	content.WriteString(m.renderSessionFooter())
 
-	inputBox := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("238")).
-		Padding(0, 1).
-		Width(m.width - 4)
-
-	content := labelStr + hint + "\n" + m.textarea.View()
-
-	// 显示命令列表
-	if m.showCommands {
-		content += "\n" + m.renderCommandList()
-	}
-
-	return inputBox.Render(content)
+	return content.String()
 }
 
-func (m *Model) renderCommandList() string {
-	filtered := m.filteredCommands()
-	if len(filtered) == 0 {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("  No matching commands")
-	}
+// renderSessionHeader 渲染会话页面的 header
+func (m *Model) renderSessionHeader() string {
+	theme := getTheme()
 
-	var b strings.Builder
-	limit := min(len(filtered), 8)
+	// 左侧：会话标题
+	title := "# " + lastSegment(m.currentSession)
+	left := lipgloss.NewStyle().Foreground(theme.text).Render(title)
 
-	for i := 0; i < limit; i++ {
-		cmd := filtered[i]
-		style := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-		prefix := "  "
+	// 右侧：版本和状态
+	version := "- HighClaw 0.1.0"
+	tagline := "High performance Go runtime."
+	right := lipgloss.NewStyle().Foreground(theme.textMuted).Render(version) +
+		"\n" + lipgloss.NewStyle().Foreground(theme.textMuted).Render(tagline)
 
-		if i == m.selectedCommand {
-			style = lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Bold(true)
-			prefix = "▶ "
-		}
-
-		desc := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(" - " + cmd.Description)
-		b.WriteString(style.Render(prefix+"/"+cmd.Name) + desc + "\n")
-	}
-
-	return b.String()
-}
-
-func (m *Model) renderFooter() string {
-	dim := lipgloss.Color("240")
-
-	// Left: error or RTT
-	var left string
-	if m.lastError != "" {
-		left = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗ " + truncStr(m.lastError, 40))
-	} else if m.lastRTT > 0 {
-		left = lipgloss.NewStyle().Foreground(dim).Render(fmt.Sprintf("⏱ %s", m.lastRTT.Round(time.Millisecond)))
-	}
-
-	// Right: keyboard hints
-	hints := []string{
-		"Tab:focus",
-		"Ctrl+N:new",
-		"Ctrl+L:clear",
-		"/help",
-	}
-	right := lipgloss.NewStyle().Foreground(dim).Render(strings.Join(hints, " │ "))
-
+	// 计算间距
 	leftWidth := lipgloss.Width(left)
-	rightWidth := lipgloss.Width(right)
+	rightWidth := lipgloss.Width(version)
 	gap := m.width - leftWidth - rightWidth - 4
 	if gap < 1 {
 		gap = 1
 	}
 
-	return lipgloss.NewStyle().Padding(0, 1).Render(left + strings.Repeat(" ", gap) + right)
+	header := lipgloss.NewStyle().PaddingLeft(1).PaddingRight(1).Render(
+		left + strings.Repeat(" ", gap) + right)
+
+	return header
+}
+
+// renderFooter 渲染首页底部状态栏
+func (m *Model) renderFooter() string {
+	theme := getTheme()
+
+	// 左侧：目录
+	pwd, _ := os.Getwd()
+	left := lipgloss.NewStyle().Foreground(theme.textMuted).Render(pwd)
+
+	// 右侧：版本
+	right := lipgloss.NewStyle().Foreground(theme.textMuted).Render("v0.1.0")
+
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 4
+	if gap < 1 {
+		gap = 1
+	}
+
+	return lipgloss.NewStyle().PaddingLeft(1).PaddingRight(1).Render(
+		left + strings.Repeat(" ", gap) + right)
+}
+
+// renderSessionFooter 渲染会话页面底部状态栏
+func (m *Model) renderSessionFooter() string {
+	theme := getTheme()
+
+	// 左侧：状态
+	var leftParts []string
+	if m.pending {
+		leftParts = append(leftParts,
+			lipgloss.NewStyle().
+				Background(theme.primary).
+				Foreground(lipgloss.Color("#000000")).
+				Padding(0, 1).
+				Render("ACTIVE"))
+		leftParts = append(leftParts,
+			lipgloss.NewStyle().Foreground(theme.textMuted).Render("esc interrupt"))
+	}
+	left := strings.Join(leftParts, " ")
+
+	// 右侧：快捷键提示
+	hints := []string{
+		lipgloss.NewStyle().Foreground(theme.textMuted).Render("tab agents"),
+		lipgloss.NewStyle().Foreground(theme.textMuted).Render("ctrl+p commands"),
+	}
+	right := strings.Join(hints, "  ")
+
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 4
+	if gap < 1 {
+		gap = 1
+	}
+
+	return lipgloss.NewStyle().PaddingLeft(1).PaddingRight(1).Render(
+		left + strings.Repeat(" ", gap) + right)
 }
 
 func (m *Model) resize() {
-	mainWidth := m.width - sidebarWidth - 10
-	mainHeight := m.height - inputHeight - headerHeight - footerHeight - 8
-	if mainWidth < 20 {
-		mainWidth = 20
-	}
-	if mainHeight < 5 {
-		mainHeight = 5
-	}
-	m.viewport.Width = mainWidth
-	m.viewport.Height = mainHeight
-	m.textarea.SetWidth(m.width - 10)
+	m.viewport.Width = m.width - 2
+	m.viewport.Height = m.height - 8
+	m.textarea.SetWidth(m.width - 6)
 }
 
 func (m *Model) appendLine(role, content string) {
@@ -729,122 +538,35 @@ func (m *Model) appendLine(role, content string) {
 }
 
 func (m *Model) updateViewport() {
-	if m.viewport.Width <= 0 {
-		return
-	}
+	theme := getTheme()
 	var b strings.Builder
-	dim := lipgloss.Color("240")
 
-	for i, line := range m.lines {
-		stamp := lipgloss.NewStyle().Foreground(dim).Render(line.Timestamp.Format("15:04"))
-
-		var roleIcon string
-		var roleStyle lipgloss.Style
-
+	for _, line := range m.lines {
 		switch line.Role {
 		case "user":
-			roleIcon = "▸"
-			roleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
+			// 用户消息：带竖线边框
+			border := lipgloss.NewStyle().Foreground(theme.primary).Render("│ ")
+			content := lipgloss.NewStyle().Foreground(theme.text).Render(line.Content)
+			b.WriteString(border + content + "\n\n")
+
 		case "assistant":
-			roleIcon = "◂"
-			roleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-		default:
-			roleIcon = "─"
-			roleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("226"))
+			// Assistant 消息
+			icon := lipgloss.NewStyle().Foreground(theme.textMuted).Render("▶ ")
+			label := lipgloss.NewStyle().Foreground(theme.textMuted).Render("Sisyphus (Ultraworker)")
+			model := lipgloss.NewStyle().Foreground(theme.textMuted).Render(" - " + m.cfg.Agent.Model)
+			b.WriteString(icon + label + model + "\n")
+			content := lipgloss.NewStyle().Foreground(theme.text).Width(m.viewport.Width - 4).Render(line.Content)
+			b.WriteString(content + "\n\n")
+
+		case "system":
+			// 系统消息
+			content := lipgloss.NewStyle().Foreground(theme.textMuted).Italic(true).Render(line.Content)
+			b.WriteString(content + "\n\n")
 		}
-
-		header := fmt.Sprintf(" %s %s %s", stamp, roleStyle.Render(roleIcon), roleStyle.Render(strings.ToUpper(line.Role)))
-		b.WriteString(header + "\n")
-
-		// Content with wrapping
-		content := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("252")).
-			Width(m.viewport.Width - 4).
-			Render(line.Content)
-		b.WriteString("   " + content)
-
-		if i < len(m.lines)-1 {
-			b.WriteString("\n" + lipgloss.NewStyle().Foreground(dim).Render(strings.Repeat("·", min(m.viewport.Width-6, 60))))
-		}
-		b.WriteString("\n")
 	}
 
 	m.viewport.SetContent(strings.TrimRight(b.String(), "\n"))
 	m.viewport.GotoBottom()
-}
-
-func (m *Model) startNewSession() {
-	m.history = nil
-	m.lines = nil
-	newKey := buildSessionKey(m.opts.Agent, fmt.Sprintf("session-%d", time.Now().Unix()%100000))
-	m.currentSession = newKey
-	_ = session.SetCurrent(newKey)
-	m.sessionFilter = ""
-	m.selectedSession = 0
-	m.appendLine("system", "New session: "+newKey)
-	m.persistCurrentSession()
-	m.updateViewport()
-}
-
-func (m *Model) moveSessionSelection(delta int) {
-	visible := m.filteredSessions()
-	if len(visible) == 0 {
-		return
-	}
-	m.selectedSession += delta
-	if m.selectedSession < 0 {
-		m.selectedSession = 0
-	}
-	if m.selectedSession >= len(visible) {
-		m.selectedSession = len(visible) - 1
-	}
-}
-
-func (m *Model) moveCommandSelection(delta int) {
-	filtered := m.filteredCommands()
-	if len(filtered) == 0 {
-		return
-	}
-	m.selectedCommand += delta
-	if m.selectedCommand < 0 {
-		m.selectedCommand = 0
-	}
-	if m.selectedCommand >= len(filtered) {
-		m.selectedCommand = len(filtered) - 1
-	}
-}
-
-func (m *Model) filteredCommands() []Command {
-	if m.commandFilter == "" {
-		return getBuiltinCommands()
-	}
-	filter := strings.ToLower(m.commandFilter)
-	var result []Command
-	for _, cmd := range getBuiltinCommands() {
-		if strings.HasPrefix(cmd.Name, filter) {
-			result = append(result, cmd)
-			continue
-		}
-		for _, alias := range cmd.Aliases {
-			if strings.HasPrefix(alias, filter) {
-				result = append(result, cmd)
-				break
-			}
-		}
-	}
-	return result
-}
-
-func (m *Model) activateSelectedSession() {
-	visible := m.filteredSessions()
-	if len(visible) == 0 || m.selectedSession < 0 || m.selectedSession >= len(visible) {
-		return
-	}
-	s := visible[m.selectedSession]
-	m.currentSession = s.Key
-	_ = session.SetCurrent(s.Key)
-	m.loadCurrentSession()
-	m.updateViewport()
 }
 
 func (m *Model) loadCurrentSession() {
@@ -852,7 +574,6 @@ func (m *Model) loadCurrentSession() {
 	m.lines = nil
 	sess, err := session.Load(m.currentSession)
 	if err != nil {
-		m.appendLine("system", fmt.Sprintf("Session: %s", m.currentSession))
 		return
 	}
 	for _, msg := range sess.Messages() {
@@ -870,8 +591,10 @@ func (m *Model) loadCurrentSession() {
 			m.history = append(m.history, agent.ChatMessage{Role: role, Content: content})
 		}
 	}
-	if len(m.lines) == 0 {
-		m.appendLine("system", fmt.Sprintf("Session: %s", m.currentSession))
+	// 如果有历史消息，直接进入会话页面
+	if len(m.lines) > 0 {
+		m.page = pageSession
+		m.updateViewport()
 	}
 }
 
@@ -891,20 +614,21 @@ func (m *Model) persistCurrentSession() {
 		})
 	}
 	_ = session.SaveFromHistory(m.currentSession, "tui", m.opts.Agent, m.cfg.Agent.Model, history)
-	m.upsertSessionEntry(sessionEntry{
-		Key:       m.currentSession,
-		Label:     m.currentSession,
-		Channel:   "tui",
-		UpdatedAt: time.Now(),
-		Model:     m.cfg.Agent.Model,
-	})
+}
+
+func (m *Model) startNewSession() {
+	m.history = nil
+	m.lines = nil
+	newKey := buildSessionKey(m.opts.Agent, fmt.Sprintf("session-%d", time.Now().Unix()%100000))
+	m.currentSession = newKey
+	_ = session.SetCurrent(newKey)
+	m.page = pageHome
 }
 
 func loadBootCmd(opts Options) tea.Cmd {
 	return func() tea.Msg {
 		sessions, err := loadSessionIndex(opts.Agent)
-		reachable := probeGatewayReachable(opts.GatewayURL)
-		return bootMsg{Sessions: sessions, Reachable: reachable, Err: err}
+		return bootMsg{Sessions: sessions, Err: err}
 	}
 }
 
@@ -961,30 +685,6 @@ func loadSessionIndex(agentID string) ([]sessionEntry, error) {
 	return entries, nil
 }
 
-func probeGatewayReachable(gatewayURL string) bool {
-	u, err := url.Parse(strings.TrimSpace(gatewayURL))
-	if err != nil || u.Host == "" {
-		return false
-	}
-	scheme := "http"
-	if strings.EqualFold(u.Scheme, "wss") {
-		scheme = "https"
-	}
-	base := scheme + "://" + u.Host
-	client := http.Client{Timeout: 1200 * time.Millisecond}
-	paths := []string{"/api/health", "/health"}
-	for _, p := range paths {
-		resp, err := client.Get(base + p)
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode >= 200 && resp.StatusCode < 500 {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func buildSessionKey(agentID, sessionName string) string {
 	if strings.HasPrefix(sessionName, "agent:") {
 		return sessionName
@@ -1006,51 +706,37 @@ func cloneHistory(in []agent.ChatMessage) []agent.ChatMessage {
 	return out
 }
 
-func (m *Model) filteredSessions() []sessionEntry {
-	if len(m.sessions) == 0 {
-		return nil
-	}
-	q := strings.ToLower(strings.TrimSpace(m.sessionFilter))
-	if q == "" {
-		out := make([]sessionEntry, len(m.sessions))
-		copy(out, m.sessions)
-		return out
-	}
-	out := make([]sessionEntry, 0, len(m.sessions))
-	for _, s := range m.sessions {
-		if strings.Contains(strings.ToLower(s.Key), q) ||
-			strings.Contains(strings.ToLower(s.Label), q) {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-func (m *Model) upsertSessionEntry(e sessionEntry) {
-	for i := range m.sessions {
-		if m.sessions[i].Key == e.Key {
-			m.sessions[i] = e
-			sort.Slice(m.sessions, func(a, b int) bool {
-				return m.sessions[a].UpdatedAt.After(m.sessions[b].UpdatedAt)
-			})
-			return
-		}
-	}
-	m.sessions = append(m.sessions, e)
-	sort.Slice(m.sessions, func(a, b int) bool {
-		return m.sessions[a].UpdatedAt.After(m.sessions[b].UpdatedAt)
-	})
-}
-
-func shortSession(s string, maxLen int) string {
-	parts := strings.Split(s, ":")
-	if len(parts) > 0 {
-		s = parts[len(parts)-1]
-	}
-	if len(s) <= maxLen {
+func lastSegment(s string) string {
+	parts := strings.Split(strings.TrimSpace(s), ":")
+	if len(parts) == 0 {
 		return s
 	}
-	return s[:maxLen-1] + "…"
+	return parts[len(parts)-1]
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// Run 使用默认选项启动 TUI
+func Run() error {
+	return RunWithOptions(Options{})
+}
+
+// RunWithOptions 使用自定义选项启动 TUI
+func RunWithOptions(opts Options) error {
+	p := tea.NewProgram(
+		NewModel(opts),
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
+	)
+	if _, err := p.Run(); err != nil {
+		return fmt.Errorf("run TUI: %w", err)
+	}
+	return nil
 }
 
 func relativeTime(t time.Time) string {
@@ -1068,37 +754,4 @@ func relativeTime(t time.Time) string {
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	}
 	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
-}
-
-func lastSegment(s string) string {
-	parts := strings.Split(strings.TrimSpace(s), ":")
-	if len(parts) == 0 {
-		return s
-	}
-	return parts[len(parts)-1]
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-// Run starts the TUI with default options
-func Run() error {
-	return RunWithOptions(Options{})
-}
-
-// RunWithOptions starts the TUI with custom options
-func RunWithOptions(opts Options) error {
-	p := tea.NewProgram(
-		NewModel(opts),
-		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
-	)
-	if _, err := p.Run(); err != nil {
-		return fmt.Errorf("run TUI: %w", err)
-	}
-	return nil
 }
