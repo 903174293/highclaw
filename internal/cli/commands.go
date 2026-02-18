@@ -26,13 +26,17 @@ import (
 	skillapp "github.com/highclaw/highclaw/internal/application/skill"
 	"github.com/highclaw/highclaw/internal/config"
 	"github.com/highclaw/highclaw/internal/domain/model"
+	"github.com/highclaw/highclaw/internal/gateway/protocol"
 	"github.com/highclaw/highclaw/internal/gateway/session"
 	"github.com/highclaw/highclaw/internal/tui"
 	"github.com/spf13/cobra"
 )
 
 var (
-	agentMessage string
+	agentMessage     string
+	agentProvider    string
+	agentModel       string
+	agentTemperature float64
 
 	cronTaskID      string
 	cronTaskSpec    string
@@ -48,6 +52,11 @@ var (
 	uninstallYes    bool
 
 	migrateDryRun bool
+
+	tuiGateway string
+	tuiAgent   string
+	tuiSession string
+	tuiModel   string
 )
 
 // --- Agent Command ---
@@ -84,14 +93,19 @@ var agentChatCmd = &cobra.Command{
 			return fmt.Errorf("message cannot be empty")
 		}
 
+		sessionKey := fmt.Sprintf("agent:%s:%s", "main", fmt.Sprintf("cli-%d", time.Now().UnixNano()))
 		result, err := runner.Run(context.Background(), &agent.RunRequest{
-			SessionKey: "cli",
-			Channel:    "cli",
-			Message:    msg,
+			SessionKey:  sessionKey,
+			Channel:     "cli",
+			Message:     msg,
+			Provider:    strings.TrimSpace(agentProvider),
+			Model:       strings.TrimSpace(agentModel),
+			Temperature: agentTemperature,
 		})
 		if err != nil {
-			return fmt.Errorf("agent run: %w", err)
+			return err
 		}
+		_ = saveCLISession(sessionKey, cfg.Agent.Model, msg, result.Reply)
 
 		fmt.Println(result.Reply)
 		return nil
@@ -126,10 +140,10 @@ var channelsDoctorCmd = &cobra.Command{
 			return err
 		}
 		fmt.Println("channel doctor:")
-		fmt.Printf("  telegram: %s\n", boolText(cfg.Channels.Telegram.BotToken != ""))
-		fmt.Printf("  discord : %s\n", boolText(cfg.Channels.Discord.Token != ""))
-		fmt.Printf("  slack   : %s\n", boolText(cfg.Channels.Slack.BotToken != ""))
-		fmt.Printf("  signal  : %s\n", boolText(cfg.Channels.Signal.Enabled))
+		fmt.Printf("  telegram: %s\n", boolText(cfg.Channels.Telegram != nil && cfg.Channels.Telegram.BotToken != ""))
+		fmt.Printf("  discord : %s\n", boolText(cfg.Channels.Discord != nil && cfg.Channels.Discord.Token != ""))
+		fmt.Printf("  slack   : %s\n", boolText(cfg.Channels.Slack != nil && cfg.Channels.Slack.BotToken != ""))
+		fmt.Printf("  signal  : %s\n", boolText(cfg.Channels.Signal != nil && cfg.Channels.Signal.Enabled))
 		return nil
 	},
 }
@@ -146,15 +160,15 @@ var channelsLoginCmd = &cobra.Command{
 		}
 		switch ch {
 		case "telegram":
-			if cfg.Channels.Telegram.BotToken == "" {
+			if cfg.Channels.Telegram == nil || cfg.Channels.Telegram.BotToken == "" {
 				return fmt.Errorf("telegram bot token is empty in config")
 			}
 		case "discord":
-			if cfg.Channels.Discord.Token == "" {
+			if cfg.Channels.Discord == nil || cfg.Channels.Discord.Token == "" {
 				return fmt.Errorf("discord token is empty in config")
 			}
 		case "slack":
-			if cfg.Channels.Slack.BotToken == "" {
+			if cfg.Channels.Slack == nil || cfg.Channels.Slack.BotToken == "" {
 				return fmt.Errorf("slack bot token is empty in config")
 			}
 		case "whatsapp":
@@ -175,10 +189,10 @@ var channelsStatusCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Printf("telegram: %v\n", cfg.Channels.Telegram.BotToken != "")
-		fmt.Printf("discord : %v\n", cfg.Channels.Discord.Token != "")
-		fmt.Printf("slack   : %v\n", cfg.Channels.Slack.BotToken != "")
-		fmt.Printf("signal  : %v\n", cfg.Channels.Signal.Enabled)
+		fmt.Printf("telegram: %v\n", cfg.Channels.Telegram != nil && cfg.Channels.Telegram.BotToken != "")
+		fmt.Printf("discord : %v\n", cfg.Channels.Discord != nil && cfg.Channels.Discord.Token != "")
+		fmt.Printf("slack   : %v\n", cfg.Channels.Slack != nil && cfg.Channels.Slack.BotToken != "")
+		fmt.Printf("signal  : %v\n", cfg.Channels.Signal != nil && cfg.Channels.Signal.Enabled)
 		return nil
 	},
 }
@@ -354,6 +368,7 @@ var statusCmd = &cobra.Command{
 		cfg, err := config.Load()
 		if err != nil {
 			fmt.Printf("⚠️  Config: %v\n", err)
+			cfg = config.Default()
 		} else {
 			fmt.Printf("✅ Config loaded from: %s\n", config.ConfigPath())
 		}
@@ -367,13 +382,13 @@ var statusCmd = &cobra.Command{
 		fmt.Printf("   Workspace: %s\n", cfg.Agent.Workspace)
 
 		fmt.Printf("\n📡 Channels:\n")
-		if cfg.Channels.Telegram.BotToken != "" {
+		if cfg.Channels.Telegram != nil && cfg.Channels.Telegram.BotToken != "" {
 			fmt.Printf("   Telegram: configured\n")
 		}
-		if cfg.Channels.Discord.Token != "" {
+		if cfg.Channels.Discord != nil && cfg.Channels.Discord.Token != "" {
 			fmt.Printf("   Discord: configured\n")
 		}
-		if cfg.Channels.Slack.BotToken != "" {
+		if cfg.Channels.Slack != nil && cfg.Channels.Slack.BotToken != "" {
 			fmt.Printf("   Slack: configured\n")
 		}
 
@@ -850,7 +865,7 @@ var modelsSetCmd = &cobra.Command{
 			modelID = parts[1]
 		}
 		if !modelIDExists(modelID) && !modelIDExists(target) {
-			return fmt.Errorf("unknown model: %s", target)
+			fmt.Fprintf(os.Stderr, "warning: model %q not found in built-in catalog; saving as custom value\n", target)
 		}
 		cfg.Agent.Model = target
 		if err := config.Save(cfg); err != nil {
@@ -1346,7 +1361,12 @@ var tuiCmd = &cobra.Command{
 	Use:   "tui",
 	Short: "Launch terminal UI (interactive chat)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return tui.Run()
+		return tui.RunWithOptions(tui.Options{
+			GatewayURL: tuiGateway,
+			Agent:      tuiAgent,
+			Session:    tuiSession,
+			Model:      tuiModel,
+		})
 	},
 }
 
@@ -1714,9 +1734,16 @@ func init() {
 	cronCreateCmd.Flags().StringVar(&cronTaskSpec, "spec", "", "Cron schedule expression")
 	cronCreateCmd.Flags().StringVar(&cronTaskCommand, "command", "", "Command to execute")
 	agentCmd.Flags().StringVarP(&agentMessage, "message", "m", "", "Send one message and exit")
+	agentCmd.Flags().StringVarP(&agentProvider, "provider", "p", "", "Provider override (e.g. openrouter, anthropic, glm)")
+	agentCmd.Flags().StringVar(&agentModel, "model", "", "Model override (e.g. anthropic/claude-sonnet-4)")
+	agentCmd.Flags().Float64VarP(&agentTemperature, "temperature", "t", 0.7, "Sampling temperature (0.0 - 2.0)")
 
 	modelsListCmd.Flags().BoolVar(&modelsShowAll, "all", false, "Show all models")
 	migrateOpenClawCmd.Flags().BoolVar(&migrateDryRun, "dry-run", false, "Preview migration actions without writing")
+	tuiCmd.Flags().StringVarP(&tuiGateway, "gateway", "g", "ws://127.0.0.1:18789", "Gateway WebSocket URL")
+	tuiCmd.Flags().StringVarP(&tuiAgent, "agent", "a", "main", "Agent ID")
+	tuiCmd.Flags().StringVarP(&tuiSession, "session", "s", "main", "Session name or full session key")
+	tuiCmd.Flags().StringVarP(&tuiModel, "model", "m", "", "Override model for this TUI run")
 
 	logsTailCmd.Flags().IntVarP(&logTailLines, "lines", "n", 200, "Number of recent lines to show")
 	logsTailCmd.Flags().BoolVarP(&logTailFollow, "follow", "f", false, "Follow log output")
@@ -1774,13 +1801,29 @@ func lookupConfigKey(cfg *config.Config, key string) (any, error) {
 		return cfg.Gateway.Auth.Mode, nil
 	case "gateway.auth.token":
 		return cfg.Gateway.Auth.Token, nil
+	case "memory.backend":
+		return cfg.Memory.Backend, nil
+	case "memory.autoSave":
+		return cfg.Memory.AutoSave, nil
 	case "channels.telegram.botToken":
+		if cfg.Channels.Telegram == nil {
+			return "", nil
+		}
 		return cfg.Channels.Telegram.BotToken, nil
 	case "channels.discord.token":
+		if cfg.Channels.Discord == nil {
+			return "", nil
+		}
 		return cfg.Channels.Discord.Token, nil
 	case "channels.slack.botToken":
+		if cfg.Channels.Slack == nil {
+			return "", nil
+		}
 		return cfg.Channels.Slack.BotToken, nil
 	case "channels.signal.enabled":
+		if cfg.Channels.Signal == nil {
+			return false, nil
+		}
 		return cfg.Channels.Signal.Enabled, nil
 	case "browser.enabled":
 		return cfg.Browser.Enabled, nil
@@ -1817,13 +1860,33 @@ func setConfigKey(cfg *config.Config, key, value string) error {
 		cfg.Gateway.Auth.Mode = value
 	case "gateway.auth.token":
 		cfg.Gateway.Auth.Token = value
+	case "memory.backend":
+		cfg.Memory.Backend = strings.TrimSpace(value)
+	case "memory.autoSave":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid bool for %s: %w", key, err)
+		}
+		cfg.Memory.AutoSave = b
 	case "channels.telegram.botToken":
+		if cfg.Channels.Telegram == nil {
+			cfg.Channels.Telegram = &config.TelegramConfig{}
+		}
 		cfg.Channels.Telegram.BotToken = value
 	case "channels.discord.token":
+		if cfg.Channels.Discord == nil {
+			cfg.Channels.Discord = &config.DiscordConfig{}
+		}
 		cfg.Channels.Discord.Token = value
 	case "channels.slack.botToken":
+		if cfg.Channels.Slack == nil {
+			cfg.Channels.Slack = &config.SlackConfig{}
+		}
 		cfg.Channels.Slack.BotToken = value
 	case "channels.signal.enabled":
+		if cfg.Channels.Signal == nil {
+			cfg.Channels.Signal = &config.SignalConfig{}
+		}
 		b, err := strconv.ParseBool(value)
 		if err != nil {
 			return fmt.Errorf("invalid bool for %s: %w", key, err)
@@ -1870,7 +1933,7 @@ func validateConfig(cfg *config.Config) []string {
 	if cfg.Gateway.Auth.Mode != "" && cfg.Gateway.Auth.Mode != "none" && cfg.Gateway.Auth.Mode != "token" && cfg.Gateway.Auth.Mode != "password" {
 		issues = append(issues, "gateway.auth.mode must be one of: none, token, password")
 	}
-	if cfg.Gateway.Auth.Mode == "token" && strings.TrimSpace(cfg.Gateway.Auth.Token) == "" {
+	if cfg.Gateway.Auth.Mode == "token" && strings.TrimSpace(cfg.Gateway.Auth.Token) == "" && cfg.Gateway.Bind != "loopback" {
 		issues = append(issues, "gateway.auth.token is required when mode is token")
 	}
 	return issues
@@ -2258,6 +2321,32 @@ func writeJSONFile(path string, v any) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+func saveCLISession(sessionKey, modelName, userMessage, assistantReply string) error {
+	now := time.Now()
+	sess := &session.Session{
+		Key:            sessionKey,
+		Channel:        "cli",
+		AgentID:        "main",
+		Model:          modelName,
+		MessageCount:   0,
+		CreatedAt:      now,
+		LastActivityAt: now,
+	}
+	sess.AddMessage(protocol.ChatMessage{
+		Role:      "user",
+		Content:   userMessage,
+		Channel:   "cli",
+		Timestamp: now.UnixMilli(),
+	})
+	sess.AddMessage(protocol.ChatMessage{
+		Role:      "assistant",
+		Content:   assistantReply,
+		Channel:   "cli",
+		Timestamp: time.Now().UnixMilli(),
+	})
+	return sess.Save()
 }
 
 func boolText(ok bool) string {

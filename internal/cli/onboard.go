@@ -51,6 +51,7 @@ type projectContext struct {
 const (
 	ansiReset  = "\033[0m"
 	ansiBold   = "\033[1m"
+	ansiUnder  = "\033[4m"
 	ansiCyan   = "\033[36m"
 	ansiGreen  = "\033[32m"
 	ansiYellow = "\033[33m"
@@ -80,7 +81,7 @@ func runOnboard(cmd *cobra.Command, args []string) error {
 	if onboardInteractive && onboardChannelsOnly {
 		return fmt.Errorf("use either --interactive or --channels-only, not both")
 	}
-	if onboardChannelsOnly && (strings.TrimSpace(onboardAPIKey) != "" || strings.TrimSpace(onboardProvider) != "" || strings.TrimSpace(onboardModel) != "" || strings.TrimSpace(onboardMemory) != "") {
+	if onboardChannelsOnly && (cmd.Flags().Changed("api-key") || cmd.Flags().Changed("provider") || cmd.Flags().Changed("model") || cmd.Flags().Changed("memory")) {
 		return fmt.Errorf("--channels-only does not accept --api-key, --provider, --model, or --memory")
 	}
 
@@ -95,7 +96,7 @@ func runOnboard(cmd *cobra.Command, args []string) error {
 
 func runWizard(cfg *config.Config) error {
 	fmt.Print(cyan(wizardBanner))
-	fmt.Println("  Welcome to ZeroClaw — the fastest, smallest AI assistant.")
+	fmt.Println("  Welcome to HighClaw — the fastest, smallest AI assistant.")
 	fmt.Println("  This wizard will configure your agent in under 60 seconds.")
 	fmt.Println()
 
@@ -118,7 +119,7 @@ func runWizard(cfg *config.Config) error {
 	}
 	cfg.Agent.Providers[provider] = p
 
-	printStep(3, 8, "Channels (How You Talk to ZeroClaw)")
+	printStep(3, 8, "Channels (How You Talk to HighClaw)")
 	cfg.Channels = setupChannels()
 
 	printStep(4, 8, "Tunnel (Expose to Internet)")
@@ -138,7 +139,7 @@ func runWizard(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("  ✓ Created %d files, skipped %d existing | 5 subdirectories\n", createdFiles, skippedFiles)
+	fmt.Printf("  %s Created %d files, skipped %d existing | 5 subdirectories\n", green("✓"), createdFiles, skippedFiles)
 	printWorkspaceTree(ws)
 
 	if cfg.Autonomy.Level == "" {
@@ -164,12 +165,12 @@ func runChannelsRepairWizard(cfg *config.Config) error {
 	fmt.Print(cyan(wizardBanner))
 	fmt.Println("  Channels Repair — update channel tokens and allowlists only")
 	fmt.Println()
-	printStep(1, 1, "Channels (How You Talk to ZeroClaw)")
+	printStep(1, 1, "Channels (How You Talk to HighClaw)")
 	cfg.Channels = setupChannels()
 	if err := config.Save(cfg); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
-	fmt.Printf("  ✓ Channel config saved: %s\n", config.ConfigPath())
+	fmt.Printf("  %s Channel config saved: %s\n", green("✓"), config.ConfigPath())
 	promptLaunchChannels(cfg)
 	return nil
 }
@@ -219,7 +220,7 @@ func runQuickSetup(cfg *config.Config) error {
 	defaultCtx := projectContext{
 		UserName:           os.Getenv("USER"),
 		Timezone:           "UTC",
-		AgentName:          "ZeroClaw",
+		AgentName:          "HighClaw",
 		CommunicationStyle: "Be warm, natural, and clear. Use occasional relevant emojis (1-2 max) and avoid robotic phrasing.",
 	}
 	createdFiles, skippedFiles, _, ws, err := ensureWorkspaceLayout(cfg.Agent.Workspace, defaultCtx)
@@ -269,7 +270,8 @@ func setupWorkspace() string {
 		base = expandPath(promptString("Enter workspace path", home))
 	}
 	ws := filepath.Join(base, "workspace")
-	fmt.Printf("  ✓ Workspace: %s\n", ws)
+	fmt.Printf("  %s Workspace: %s\n", green("✓"), green(ws))
+	fmt.Println()
 	return ws
 }
 
@@ -283,6 +285,8 @@ func setupProvider() (string, string, string) {
 		"🔧 Custom — bring your own OpenAI-compatible API",
 	}
 	tier := promptSelect("Select provider category", tiers, 0)
+	fmt.Printf("  Select provider category: %s\n", tiers[tier])
+	fmt.Println()
 
 	type opt struct{ Key, Label string }
 	var providers []opt
@@ -327,7 +331,7 @@ func setupProvider() (string, string, string) {
 	default:
 		fmt.Println()
 		fmt.Println("  Custom Provider Setup — any OpenAI-compatible API")
-		printBullet("ZeroClaw works with ANY API that speaks the OpenAI chat completions format.")
+		printBullet("HighClaw works with ANY API that speaks the OpenAI chat completions format.")
 		printBullet("Examples: LiteLLM, LocalAI, vLLM, text-generation-webui, LM Studio, etc.")
 		fmt.Println()
 		baseURL := strings.TrimRight(strings.TrimSpace(promptString("API base URL (e.g. http://localhost:1234 or https://my-api.com)", "")), "/")
@@ -339,7 +343,8 @@ func setupProvider() (string, string, string) {
 		if model == "" {
 			model = "default"
 		}
-		fmt.Printf("  ✓ Provider: custom:%s | Model: %s\n", baseURL, model)
+		fmt.Printf("  %s Provider: %s | Model: %s\n", green("✓"), green("custom:"+baseURL), green(model))
+		fmt.Println()
 		return "custom:" + baseURL, key, model
 	}
 
@@ -347,7 +352,10 @@ func setupProvider() (string, string, string) {
 	for _, p := range providers {
 		labels = append(labels, p.Label)
 	}
-	provider := providers[promptSelect("Select your AI provider", labels, 0)].Key
+	providerIdx := promptSelect("Select your AI provider", labels, 0)
+	provider := providers[providerIdx].Key
+	fmt.Printf("  Select your AI provider: %s\n", labels[providerIdx])
+	fmt.Println()
 
 	apiKey := ""
 	if provider == "ollama" {
@@ -355,11 +363,11 @@ func setupProvider() (string, string, string) {
 	} else if provider == "gemini" || provider == "google" || provider == "google-gemini" {
 		if hasGeminiCLICredentials() {
 			printBullet("✓ Gemini CLI credentials detected! You can skip the API key.")
-			printBullet("ZeroClaw will reuse your existing Gemini CLI authentication.")
+			printBullet("HighClaw will reuse your existing Gemini CLI authentication.")
 			fmt.Println()
 			useCLI := promptYesNo("Use existing Gemini CLI authentication?", true)
 			if useCLI {
-				fmt.Println("  ✓ Using Gemini CLI OAuth tokens")
+				fmt.Printf("  %s Using Gemini CLI OAuth tokens\n", green("✓"))
 				apiKey = ""
 			} else {
 				printBullet("Get your API key at: https://aistudio.google.com/app/apikey")
@@ -379,6 +387,7 @@ func setupProvider() (string, string, string) {
 			printBullet("Get your API key at: " + u)
 		}
 		printBullet("You can also set it later via env var or config file.")
+		fmt.Println()
 		apiKey = strings.TrimSpace(promptString("Paste your API key (or press Enter to skip)", ""))
 		if apiKey == "" {
 			printBullet("Skipped. Set " + providerEnvVar(provider) + " or edit config.yaml later.")
@@ -390,13 +399,16 @@ func setupProvider() (string, string, string) {
 	for _, m := range models {
 		mLabels = append(mLabels, m.Label)
 	}
-	model := models[promptSelect("Select your default model", mLabels, 0)].ID
-	fmt.Printf("  ✓ Provider: %s | Model: %s\n", provider, model)
+	modelIdx := promptSelect("Select your default model", mLabels, 0)
+	model := models[modelIdx].ID
+	fmt.Printf("  Select your default model: %s\n", mLabels[modelIdx])
+	fmt.Printf("  %s Provider: %s | Model: %s\n", green("✓"), green(provider), green(model))
+	fmt.Println()
 	return provider, apiKey, model
 }
 
 func setupChannels() config.ChannelsConfig {
-	printBullet("Channels let you talk to ZeroClaw from anywhere.")
+	printBullet("Channels let you talk to HighClaw from anywhere.")
 	printBullet("CLI is always available. Connect more channels now.")
 	fmt.Println()
 
@@ -414,10 +426,11 @@ func setupChannels() config.ChannelsConfig {
 			"Done — finish setup",
 		}
 		choice := promptSelect("Connect a channel (or Done to continue)", options, 8)
+		fmt.Printf("  Connect a channel (or Done to continue): %s\n", options[choice])
 		switch choice {
 		case 0:
 			fmt.Println()
-			fmt.Println("  Telegram Setup — talk to ZeroClaw from Telegram")
+			fmt.Println("  Telegram Setup — talk to HighClaw from Telegram")
 			printBullet("1. Open Telegram and message @BotFather")
 			printBullet("2. Send /newbot and follow the prompts")
 			printBullet("3. Copy the bot token and paste it below")
@@ -445,7 +458,7 @@ func setupChannels() config.ChannelsConfig {
 			fmt.Println()
 		case 1:
 			fmt.Println()
-			fmt.Println("  Discord Setup — talk to ZeroClaw from Discord")
+			fmt.Println("  Discord Setup — talk to HighClaw from Discord")
 			printBullet("1. Go to https://discord.com/developers/applications")
 			printBullet("2. Create a New Application → Bot → Copy token")
 			printBullet("3. Enable MESSAGE CONTENT intent under Bot settings")
@@ -474,7 +487,7 @@ func setupChannels() config.ChannelsConfig {
 			fmt.Println()
 		case 2:
 			fmt.Println()
-			fmt.Println("  Slack Setup — talk to ZeroClaw from Slack")
+			fmt.Println("  Slack Setup — talk to HighClaw from Slack")
 			printBullet("1. Go to https://api.slack.com/apps → Create New App")
 			printBullet("2. Add Bot Token Scopes: chat:write, channels:history")
 			printBullet("3. Install to workspace and copy the Bot Token")
@@ -508,7 +521,7 @@ func setupChannels() config.ChannelsConfig {
 				fmt.Println("  ⚠ iMessage is only available on macOS.")
 				continue
 			}
-			printBullet("ZeroClaw reads your iMessage database and replies via AppleScript.")
+			printBullet("HighClaw reads your iMessage database and replies via AppleScript.")
 			printBullet("You need to grant Full Disk Access to your terminal in System Settings.")
 			fmt.Println()
 			contacts := parseCSV(promptString("Allowed contacts (comma-separated phone/email, or * for all)", "*"))
@@ -548,7 +561,7 @@ func setupChannels() config.ChannelsConfig {
 			fmt.Println()
 			at := strings.TrimSpace(promptString("Access token (from Meta Developers)", ""))
 			pid := strings.TrimSpace(promptString("Phone number ID (from WhatsApp app settings)", ""))
-			vt := strings.TrimSpace(promptString("Webhook verify token (create your own)", "zeroclaw-whatsapp-verify"))
+			vt := strings.TrimSpace(promptString("Webhook verify token (create your own)", "highclaw-whatsapp-verify"))
 			if at == "" || pid == "" {
 				fmt.Println("  → Skipped")
 				continue
@@ -604,7 +617,7 @@ func setupChannels() config.ChannelsConfig {
 			out.Webhook = &config.WebhookConfig{Port: port, Secret: sec}
 			fmt.Printf("  ✅ Webhook on port %d\n\n", port)
 		default:
-			fmt.Printf("  ✓ Channels: %s\n", channelsSummary(out))
+			fmt.Printf("  %s Channels: %s\n", green("✓"), green(channelsSummary(out)))
 			return out
 		}
 	}
@@ -622,6 +635,8 @@ func setupTunnel() config.TunnelConfig {
 		"Custom — bring your own (bore, frp, ssh, etc.)",
 	}
 	choice := promptSelect("Select tunnel provider", items, 0)
+	fmt.Printf("  Select tunnel provider: %s\n", items[choice])
+	fmt.Println()
 	switch choice {
 	case 1:
 		fmt.Println()
@@ -631,16 +646,16 @@ func setupTunnel() config.TunnelConfig {
 			fmt.Println("  → Skipped")
 			return config.TunnelConfig{Provider: "none"}
 		}
-		fmt.Println("  ✓ Tunnel: Cloudflare")
+		fmt.Printf("  %s Tunnel: %s\n", green("✓"), green("Cloudflare"))
 		return config.TunnelConfig{Provider: "cloudflare", Cloudflare: &config.CloudflareTunnelConfig{Token: token}}
 	case 2:
 		fmt.Println()
 		printBullet("Tailscale must be installed and authenticated (tailscale up).")
 		funnel := promptYesNo("Use Funnel (public internet)? No = tailnet only", false)
 		if funnel {
-			fmt.Println("  ✓ Tunnel: Tailscale (Funnel — public)")
+			fmt.Printf("  %s Tunnel: %s\n", green("✓"), green("Tailscale (Funnel — public)"))
 		} else {
-			fmt.Println("  ✓ Tunnel: Tailscale (Serve — tailnet only)")
+			fmt.Printf("  %s Tunnel: %s\n", green("✓"), green("Tailscale (Serve — tailnet only)"))
 		}
 		return config.TunnelConfig{Provider: "tailscale", Tailscale: &config.TailscaleTunnelConfig{Funnel: funnel}}
 	case 3:
@@ -652,7 +667,7 @@ func setupTunnel() config.TunnelConfig {
 			return config.TunnelConfig{Provider: "none"}
 		}
 		domain := strings.TrimSpace(promptString("Custom domain (optional, Enter to skip)", ""))
-		fmt.Println("  ✓ Tunnel: ngrok")
+		fmt.Printf("  %s Tunnel: %s\n", green("✓"), green("ngrok"))
 		return config.TunnelConfig{Provider: "ngrok", Ngrok: &config.NgrokTunnelConfig{AuthToken: auth, Domain: domain}}
 	case 4:
 		fmt.Println()
@@ -664,16 +679,16 @@ func setupTunnel() config.TunnelConfig {
 			fmt.Println("  → Skipped")
 			return config.TunnelConfig{Provider: "none"}
 		}
-		fmt.Printf("  ✓ Tunnel: Custom (%s)\n", cmd)
+		fmt.Printf("  %s Tunnel: %s\n", green("✓"), green(fmt.Sprintf("Custom (%s)", cmd)))
 		return config.TunnelConfig{Provider: "custom", Custom: &config.CustomTunnelConfig{StartCommand: cmd}}
 	default:
-		fmt.Println("  ✓ Tunnel: none (local only)")
+		fmt.Printf("  %s Tunnel: %s\n", green("✓"), green("none (local only)"))
 		return config.TunnelConfig{Provider: "none"}
 	}
 }
 
 func setupToolMode() (config.ComposioConfig, config.SecretsConfig) {
-	printBullet("Choose how ZeroClaw connects to external apps.")
+	printBullet("Choose how HighClaw connects to external apps.")
 	printBullet("You can always change this later in config.yaml.")
 	fmt.Println()
 	items := []string{
@@ -681,38 +696,41 @@ func setupToolMode() (config.ComposioConfig, config.SecretsConfig) {
 		"Composio (managed OAuth) — 1000+ apps via OAuth, no raw keys shared",
 	}
 	i := promptSelect("Select tool mode", items, 0)
+	fmt.Printf("  Select tool mode: %s\n", items[i])
+	fmt.Println()
 	comp := config.ComposioConfig{}
 	if i == 1 {
 		fmt.Println()
 		fmt.Println("  Composio Setup — 1000+ OAuth integrations (Gmail, Notion, GitHub, Slack, ...)")
 		printBullet("Get your API key at: https://app.composio.dev/settings")
-		printBullet("ZeroClaw uses Composio as a tool — your core agent stays local.")
+		printBullet("HighClaw uses Composio as a tool — your core agent stays local.")
 		fmt.Println()
 		key := strings.TrimSpace(promptString("Composio API key (or Enter to skip)", ""))
 		if key != "" {
 			comp.Enabled = true
 			comp.APIKey = key
-			fmt.Println("  ✓ Composio: enabled (1000+ OAuth tools available)")
+			fmt.Printf("  %s Composio: %s\n", green("✓"), green("enabled (1000+ OAuth tools available)"))
 		} else {
 			fmt.Println("  → Skipped — set composio.api_key in config.yaml later")
+			fmt.Printf("  %s Tool mode: %s\n", green("✓"), green("Sovereign (local only)")+" — full privacy, you own every key")
 		}
 	} else {
-		fmt.Println("  ✓ Tool mode: Sovereign (local only) — full privacy, you own every key")
+		fmt.Printf("  %s Tool mode: %s\n", green("✓"), green("Sovereign (local only)")+" — full privacy, you own every key")
 	}
 	fmt.Println()
-	printBullet("ZeroClaw can encrypt API keys stored in config.yaml.")
+	printBullet("HighClaw can encrypt API keys stored in config.yaml.")
 	printBullet("A local key file protects against plaintext exposure and accidental leaks.")
 	enc := promptYesNo("Enable encrypted secret storage?", true)
 	if enc {
-		fmt.Println("  ✓ Secrets: encrypted — keys encrypted with local key file")
+		fmt.Printf("  %s Secrets: %s\n", green("✓"), green("encrypted")+" — keys encrypted with local key file")
 	} else {
-		fmt.Println("  ✓ Secrets: plaintext — keys stored as plaintext (not recommended)")
+		fmt.Printf("  %s Secrets: %s\n", green("✓"), yellow("plaintext")+" — keys stored as plaintext (not recommended)")
 	}
 	return comp, config.SecretsConfig{Encrypt: enc}
 }
 
 func setupMemory() config.MemoryConfig {
-	printBullet("Choose how ZeroClaw stores and searches memories.")
+	printBullet("Choose how HighClaw stores and searches memories.")
 	printBullet("You can always change this later in config.yaml.")
 	fmt.Println()
 	items := []string{
@@ -721,6 +739,7 @@ func setupMemory() config.MemoryConfig {
 		"None — disable persistent memory",
 	}
 	choice := promptSelect("Select memory backend", items, 0)
+	fmt.Printf("  Select memory backend: %s\n", items[choice])
 	backend := "sqlite"
 	switch choice {
 	case 1:
@@ -732,7 +751,9 @@ func setupMemory() config.MemoryConfig {
 	if backend != "none" {
 		autoSave = promptYesNo("Auto-save conversations to memory?", true)
 	}
-	return memoryConfigForBackend(backend, autoSave)
+	cfg := memoryConfigForBackend(backend, autoSave)
+	fmt.Printf("  %s Memory: %s (auto-save: %s)\n", green("✓"), green(cfg.Backend), onOff(cfg.AutoSave))
+	return cfg
 }
 
 func setupProjectContext() projectContext {
@@ -755,18 +776,21 @@ func setupProjectContext() projectContext {
 		"Other (type manually)",
 	}
 	tzI := promptSelect("Your timezone", tzChoices, 0)
+	tzDisplay := tzChoices[tzI]
 	tz := "US/Eastern"
 	if tzI == len(tzChoices)-1 {
-		tz = strings.TrimSpace(promptString("Enter timezone (e.g. America/New_York)", "UTC"))
+		tzDisplay = strings.TrimSpace(promptString("Enter timezone (e.g. America/New_York)", "UTC"))
+		tz = tzDisplay
 	} else {
-		tz = strings.TrimSpace(strings.SplitN(tzChoices[tzI], "(", 2)[0])
+		tz = strings.TrimSpace(strings.SplitN(tzDisplay, "(", 2)[0])
 	}
 	if tz == "" {
 		tz = "UTC"
+		tzDisplay = "UTC"
 	}
 	agent := strings.TrimSpace(promptString("Agent name", "HighClaw"))
 	if agent == "" {
-		agent = "ZeroClaw"
+		agent = "HighClaw"
 	}
 	styles := []string{
 		"Direct & concise — skip pleasantries, get to the point",
@@ -789,7 +813,24 @@ func setupProjectContext() projectContext {
 	if si == 6 {
 		style = promptString("Custom communication style", "Be warm, natural, and clear. Use occasional relevant emojis (1-2 max) and avoid robotic phrasing.")
 	}
-	fmt.Printf("  ✓ Context: %s | %s | %s | %s\n", user, tz, agent, style)
+	styleLabel := styles[si]
+	if si == 6 {
+		styleLabel = "Custom"
+	}
+	fmt.Printf("  Your name: %s\n", user)
+	fmt.Printf("  Your timezone: %s\n", tzDisplay)
+	fmt.Printf("  Agent name: %s\n", agent)
+	fmt.Printf("  Communication style: %s\n", styleLabel)
+	fmt.Printf("  %s Context: %s %s %s %s %s %s %s\n",
+		green("✓"),
+		green(user),
+		gray("|"),
+		green(tz),
+		gray("|"),
+		green(agent),
+		gray("|"),
+		green(style),
+	)
 	return projectContext{UserName: user, Timezone: tz, AgentName: agent, CommunicationStyle: style}
 }
 
@@ -802,15 +843,19 @@ func printSummary(cfg *config.Config) {
 	fmt.Println("  " + gray("Configuration saved to:"))
 	fmt.Printf("    %s\n\n", green(config.ConfigPath()))
 	fmt.Println("  " + bold("Quick summary:"))
-	fmt.Printf("    🤖 Provider:      %s\n", modelProvider(cfg.Agent.Model))
-	fmt.Printf("    🧠 Model:         %s\n", modelName(cfg.Agent.Model))
-	fmt.Printf("    🛡️ Autonomy:      %s\n", strings.TrimSpace(cfg.Autonomy.Level))
-	fmt.Printf("    🧠 Memory:        %s (auto-save: %s)\n", cfg.Memory.Backend, onOff(cfg.Memory.AutoSave))
+	fmt.Printf("    🤖 Provider:      %s\n", green(modelProvider(cfg.Agent.Model)))
+	fmt.Printf("    🧠 Model:         %s\n", green(modelName(cfg.Agent.Model)))
+	autonomy := strings.TrimSpace(cfg.Autonomy.Level)
+	if autonomy != "" {
+		autonomy = strings.ToUpper(autonomy[:1]) + autonomy[1:]
+	}
+	fmt.Printf("    🛡️ Autonomy:      %s\n", green(autonomy))
+	fmt.Printf("    🧠 Memory:        %s (auto-save: %s)\n", green(cfg.Memory.Backend), onOff(cfg.Memory.AutoSave))
 	fmt.Printf("    📡 Channels:      %s\n", channelsSummary(cfg.Channels))
 	if hasAPIKey(cfg, modelProvider(cfg.Agent.Model)) {
-		fmt.Println("    🔑 API Key:       configured")
+		fmt.Printf("    🔑 API Key:       %s\n", green("configured"))
 	} else {
-		fmt.Println("    🔑 API Key:       not set (set via env var or config)")
+		fmt.Printf("    🔑 API Key:       %s\n", yellow("not set (set via env var or config)"))
 	}
 	if cfg.Tunnel.Provider == "" || cfg.Tunnel.Provider == "none" {
 		fmt.Println("    🌐 Tunnel:        none (local only)")
@@ -823,36 +868,36 @@ func printSummary(cfg *config.Config) {
 		fmt.Println("    🔗 Composio:      disabled (sovereign mode)")
 	}
 	if cfg.Secrets.Encrypt {
-		fmt.Println("    🔒 Secrets:       encrypted")
+		fmt.Printf("    🔒 Secrets:       %s\n", green("encrypted"))
 	} else {
 		fmt.Println("    🔒 Secrets:       plaintext")
 	}
-	fmt.Printf("    🚪 Gateway:       pairing required (127.0.0.1:%d)\n", cfg.Gateway.Port)
+	fmt.Printf("    🚪 Gateway:       %s\n", green("pairing required (secure)"))
 	fmt.Println()
 	fmt.Println("  Next steps:")
 	fmt.Println()
 	step := 1
 	if !hasAPIKey(cfg, modelProvider(cfg.Agent.Model)) {
-		fmt.Printf("    %d. Set your API key:\n", step)
-		fmt.Printf("       export %s=\"sk-...\"\n\n", providerEnvVar(modelProvider(cfg.Agent.Model)))
+		fmt.Printf("    %s Set your API key:\n", cyan(fmt.Sprintf("%d.", step)))
+		fmt.Printf("       %s\n\n", yellow(fmt.Sprintf("export %s=\"sk-...\"", providerEnvVar(modelProvider(cfg.Agent.Model)))))
 		step++
 	}
 	if hasConfiguredChannels(cfg.Channels) {
-		fmt.Printf("    %d. Launch your channels (connected channels → AI → reply):\n", step)
-		fmt.Println("       highclaw channel start")
+		fmt.Printf("    %s Launch your channels (connected channels → AI → reply):\n", cyan(fmt.Sprintf("%d.", step)))
+		fmt.Printf("       %s\n", yellow("highclaw channel start"))
 		fmt.Println()
 		step++
 	}
-	fmt.Printf("    %d. Send a quick message:\n", step)
-	fmt.Println("       highclaw agent -m \"Hello, ZeroClaw!\"")
+	fmt.Printf("    %s Send a quick message:\n", cyan(fmt.Sprintf("%d.", step)))
+	fmt.Printf("       %s\n", yellow("highclaw agent -m \"Hello, HighClaw!\""))
 	fmt.Println()
 	step++
-	fmt.Printf("    %d. Start interactive CLI mode:\n", step)
-	fmt.Println("       highclaw agent")
+	fmt.Printf("    %s Start interactive CLI mode:\n", cyan(fmt.Sprintf("%d.", step)))
+	fmt.Printf("       %s\n", yellow("highclaw agent"))
 	fmt.Println()
 	step++
-	fmt.Printf("    %d. Check full status:\n", step)
-	fmt.Println("       highclaw status")
+	fmt.Printf("    %s Check full status:\n", cyan(fmt.Sprintf("%d.", step)))
+	fmt.Printf("       %s\n", yellow("highclaw status"))
 	fmt.Println()
 	fmt.Println("  ⚡ Happy hacking! 🦀")
 	fmt.Println()
@@ -1182,7 +1227,20 @@ func printStep(current, total int, title string) {
 }
 
 func printBullet(text string) {
-	fmt.Printf("  %s %s\n", cyan("›"), text)
+	fmt.Printf("  %s %s\n", cyan("›"), highlightURLs(text))
+}
+
+func highlightURLs(text string) string {
+	parts := strings.Split(text, " ")
+	for i, p := range parts {
+		token := strings.TrimSpace(p)
+		trimmed := strings.TrimRight(token, ".,;:!?")
+		suffix := strings.TrimPrefix(token, trimmed)
+		if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
+			parts[i] = cyanUnder(trimmed) + suffix
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func memoryConfigForBackend(backend string, autoSave bool) config.MemoryConfig {
@@ -1478,8 +1536,12 @@ func color(c, s string) string {
 	return c + s + ansiReset
 }
 
-func bold(s string) string   { return color(ansiBold, s) }
-func cyan(s string) string   { return color(ansiCyan, s) }
+func bold(s string) string  { return color(ansiBold, s) }
+func under(s string) string { return color(ansiUnder, s) }
+func cyan(s string) string  { return color(ansiCyan, s) }
+func cyanUnder(s string) string {
+	return ansiUnder + ansiCyan + s + ansiReset
+}
 func green(s string) string  { return color(ansiGreen, s) }
 func yellow(s string) string { return color(ansiYellow, s) }
 func gray(s string) string   { return color(ansiGray, s) }

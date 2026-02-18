@@ -1,16 +1,17 @@
 <p align="center">
-  <img src="highclaw.png" alt="HighClaw" width="360" />
+  <img src="images/highclaw.png" alt="HighClaw" width="360" />
 </p>
 
-<h1 align="center">HighClaw <img src="highclaw.png" alt="HighClaw" style="height:1em;width:auto;vertical-align:-0.12em;" /></h1>
+<h1 align="center">HighClaw <img src="images/highclaw.png" alt="HighClaw" style="height:1em;width:auto;vertical-align:-0.12em;" /></h1>
 
 <p align="center">
-  <a href="./README.zh.md"><img src="https://img.shields.io/badge/中文文档-README.zh.md-0A66C2?style=for-the-badge" alt="中文文档" /></a>
-  <a href="./README.md"><img src="https://img.shields.io/badge/English-README.md-2EA043?style=for-the-badge" alt="English" /></a>
+  <a href="./README.zh.md"><img src="https://img.shields.io/badge/📖_中文文档-README.zh.md-0A66C2?style=for-the-badge" height="36" alt="中文文档" /></a>
+  &nbsp;
+  <a href="./README.md"><img src="https://img.shields.io/badge/📖_English-README.md-2EA043?style=for-the-badge" height="36" alt="English" /></a>
 </p>
 
 <p align="center">
-  <strong>Zero overhead. Zero compromise. High performance. 100% Go. 100% Agnostic.</strong><br>
+  <strong>High performance. Built for speed and reliability. 100% Go. 100% Agnostic.</strong><br>
   ⚡️ <strong>HighClaw keeps full feature coverage with an independent Go implementation.</strong>
 </p>
 
@@ -29,6 +30,7 @@ Go binary · modular traits · 22+ providers · pluggable channels/tools/memory 
 
 - 🏎️ **High Performance:** Optimized Go runtime with low-overhead startup and stable long-running execution.
 - 💰 **Low Deployment Cost:** Single binary deployment for edge devices, VMs, and cloud hosts.
+- 🚀 **Deployment Efficiency Advantage:** No Node/Python runtime bootstrap required; install + start in minutes.
 - ⚡ **Operationally Reliable:** Strong defaults for gateway auth, memory persistence, and channel safety.
 - 🌍 **True Portability:** Cross-platform binaries for macOS, Linux, and Windows (amd64/arm64).
 
@@ -129,12 +131,92 @@ highclaw migrate openclaw
 
 > **Dev fallback (no global install):** prefix commands with `go run ./cmd/highclaw --` (example: `go run ./cmd/highclaw -- status`).
 
+## 会话联动：`agent -m` + `tui`
+
+HighClaw 统一使用 `~/.highclaw/sessions`：
+
+- 每次执行 `highclaw agent -m "..."` 都会落盘为一个新会话。
+- `highclaw tui` 左侧栏会展示这些会话。
+- TUI 支持会话切换并继续上下文对话。
+- 左侧栏按来源分组展示：**CLI / TUI / OTHER**。
+- 会话栏支持实时过滤：切到会话栏后直接输入关键字即可。
+
+### TUI 常用按键
+
+- `Tab`: 输入框/会话栏切换焦点
+- `↑` / `↓`: 选择会话
+- `Enter`: 发送消息（输入焦点）或打开会话（会话栏焦点）
+- `Ctrl+N`: 新建会话
+- `Ctrl+R`: 刷新会话列表
+- `Ctrl+C`: 退出
+
+### 快速验证
+
+```bash
+highclaw agent -m "第一条消息"
+highclaw agent -m "第二条消息"
+highclaw tui
+```
+
+## 部署方案（Windows / Ubuntu / CentOS / macOS）
+
+### macOS
+
+```bash
+git clone https://github.com/903174293/highclaw.git
+cd highclaw
+make build
+./dist/highclaw onboard
+./dist/highclaw gateway
+```
+
+### Ubuntu
+
+```bash
+sudo apt-get update
+sudo apt-get install -y make golang-go
+git clone https://github.com/903174293/highclaw.git
+cd highclaw
+make build
+sudo make install
+highclaw onboard
+highclaw daemon
+```
+
+### CentOS / RHEL / Rocky
+
+```bash
+sudo yum install -y make golang git
+git clone https://github.com/903174293/highclaw.git
+cd highclaw
+make build
+sudo make install
+highclaw onboard
+highclaw daemon
+```
+
+### Windows（PowerShell）
+
+```powershell
+git clone https://github.com/903174293/highclaw.git
+cd highclaw
+go build -o dist/highclaw.exe ./cmd/highclaw
+.\dist\highclaw.exe onboard
+.\dist\highclaw.exe gateway
+```
+
+### 部署效率优势（产品定位补充）
+
+- 单二进制交付，减少环境依赖和部署漂移。
+- 冷启动快、资源占用低，适合边缘节点和高密度部署。
+- 多平台命令一致，降低团队维护成本。
+
 ## Architecture
 
 Every subsystem is a **trait** — swap implementations with a config change, zero code changes.
 
 <p align="center">
-  <img src="docs/architecture.svg" alt="HighClaw Architecture" width="900" />
+  <img src="images/architecture.svg" alt="HighClaw Architecture" width="900" />
 </p>
 
 | Subsystem | Trait | Ships with | Extend |
@@ -526,4 +608,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Implement a trait, submit a PR:
 
 ---
 
-**HighClaw** — Zero overhead. Zero compromise. Deploy anywhere. Swap anything. <img src="highclaw.png" alt="HighClaw" style="height:1em;width:auto;vertical-align:-0.12em;" />
+**HighClaw** — High performance. Built for speed and reliability. Deploy anywhere. Swap anything. <img src="images/highclaw.png" alt="HighClaw" style="height:1em;width:auto;vertical-align:-0.12em;" />

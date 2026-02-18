@@ -14,20 +14,7 @@ func SessionsDir() string {
 	if err != nil {
 		return ".highclaw/sessions"
 	}
-
-	// Try ~/.highclaw/sessions first
-	highclawDir := filepath.Join(home, ".highclaw", "sessions")
-	if _, err := os.Stat(filepath.Join(home, ".highclaw")); err == nil {
-		return highclawDir
-	}
-
-	// Fallback to ~/.openclaw/sessions for migration
-	openclawDir := filepath.Join(home, ".openclaw", "sessions")
-	if _, err := os.Stat(filepath.Join(home, ".openclaw")); err == nil {
-		return openclawDir
-	}
-
-	return highclawDir
+	return filepath.Join(home, ".highclaw", "sessions")
 }
 
 // Save persists a session to disk.

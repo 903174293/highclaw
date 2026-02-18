@@ -30,6 +30,10 @@ func newSQLiteMemoryStore() *sqliteMemoryStore {
 	}
 }
 
+func (s *sqliteMemoryStore) location() string {
+	return s.dbPath
+}
+
 func (s *sqliteMemoryStore) init() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

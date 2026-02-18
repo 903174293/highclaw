@@ -23,6 +23,8 @@ type Config struct {
 	Web           WebConfig           `json:"web"`
 	Autonomy      AutonomyConfig      `json:"autonomy"`
 	Memory        MemoryConfig        `json:"memory"`
+	Reliability   ReliabilityConfig   `json:"reliability"`
+	ModelRoutes   []ModelRouteConfig  `json:"modelRoutes"`
 	Tunnel        TunnelConfig        `json:"tunnel"`
 	Composio      ComposioConfig      `json:"composio"`
 	Secrets       SecretsConfig       `json:"secrets"`
@@ -71,6 +73,21 @@ type MemoryConfig struct {
 	KeywordWeight             float64 `json:"keywordWeight"`
 	EmbeddingCacheSize        int     `json:"embeddingCacheSize"`
 	ChunkMaxTokens            int     `json:"chunkMaxTokens"`
+}
+
+// ReliabilityConfig controls provider retry/backoff and fallback chain.
+type ReliabilityConfig struct {
+	ProviderRetries   uint32   `json:"providerRetries"`
+	ProviderBackoffMs uint64   `json:"providerBackoffMs"`
+	FallbackProviders []string `json:"fallbackProviders"`
+}
+
+// ModelRouteConfig maps a hint route (hint:xxx) to provider+model.
+type ModelRouteConfig struct {
+	Hint     string `json:"hint"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	APIKey   string `json:"apiKey"`
 }
 
 type TunnelConfig struct {
@@ -347,6 +364,12 @@ func Default() *Config {
 			EmbeddingCacheSize:        10000,
 			ChunkMaxTokens:            512,
 		},
+		Reliability: ReliabilityConfig{
+			ProviderRetries:   2,
+			ProviderBackoffMs: 500,
+			FallbackProviders: []string{},
+		},
+		ModelRoutes: []ModelRouteConfig{},
 		Tunnel: TunnelConfig{
 			Provider: "none",
 		},
@@ -492,15 +515,27 @@ func DefaultConfig() *Config {
 // applyEnvOverrides merges environment variables into configuration.
 func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("TELEGRAM_BOT_TOKEN"); v != "" {
+		if cfg.Channels.Telegram == nil {
+			cfg.Channels.Telegram = &TelegramConfig{}
+		}
 		cfg.Channels.Telegram.BotToken = v
 	}
 	if v := os.Getenv("DISCORD_BOT_TOKEN"); v != "" {
+		if cfg.Channels.Discord == nil {
+			cfg.Channels.Discord = &DiscordConfig{}
+		}
 		cfg.Channels.Discord.Token = v
 	}
 	if v := os.Getenv("SLACK_BOT_TOKEN"); v != "" {
+		if cfg.Channels.Slack == nil {
+			cfg.Channels.Slack = &SlackConfig{}
+		}
 		cfg.Channels.Slack.BotToken = v
 	}
 	if v := os.Getenv("SLACK_APP_TOKEN"); v != "" {
+		if cfg.Channels.Slack == nil {
+			cfg.Channels.Slack = &SlackConfig{}
+		}
 		cfg.Channels.Slack.AppToken = v
 	}
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {

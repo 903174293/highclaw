@@ -1,16 +1,17 @@
 <p align="center">
-  <img src="highclaw.png" alt="HighClaw" width="360" />
+  <img src="images/highclaw.png" alt="HighClaw" width="360" />
 </p>
 
-<h1 align="center">HighClaw <img src="highclaw.png" alt="HighClaw" style="height:1em;width:auto;vertical-align:-0.12em;" /></h1>
+<h1 align="center">HighClaw <img src="images/highclaw.png" alt="HighClaw" style="height:1em;width:auto;vertical-align:-0.12em;" /></h1>
 
 <p align="center">
-  <a href="./README.zh.md"><img src="https://img.shields.io/badge/中文文档-README.zh.md-0A66C2?style=for-the-badge" alt="中文文档" /></a>
-  <a href="./README.md"><img src="https://img.shields.io/badge/English-README.md-2EA043?style=for-the-badge" alt="English" /></a>
+  <a href="./README.zh.md"><img src="https://img.shields.io/badge/📖_中文文档-README.zh.md-0A66C2?style=for-the-badge" height="36" alt="中文文档" /></a>
+  &nbsp;
+  <a href="./README.md"><img src="https://img.shields.io/badge/📖_English-README.md-2EA043?style=for-the-badge" height="36" alt="English" /></a>
 </p>
 
 <p align="center">
-  <strong>Zero overhead. Zero compromise. High performance. 100% Go. 100% Agnostic.</strong><br>
+  <strong>High performance. Built for speed and reliability. 100% Go. 100% Agnostic.</strong><br>
   ⚡️ <strong>HighClaw keeps full feature coverage with an independent Go implementation.</strong>
 </p>
 
@@ -29,6 +30,7 @@ Go binary · modular traits · 22+ providers · pluggable channels/tools/memory 
 
 - 🏎️ **High Performance:** Optimized Go runtime with low-overhead startup and stable long-running execution.
 - 💰 **Low Deployment Cost:** Single binary deployment for edge devices, VMs, and cloud hosts.
+- 🚀 **Deployment Efficiency Advantage:** No Node/Python runtime bootstrap required; install + start in minutes.
 - ⚡ **Operationally Reliable:** Strong defaults for gateway auth, memory persistence, and channel safety.
 - 🌍 **True Portability:** Cross-platform binaries for macOS, Linux, and Windows (amd64/arm64).
 
@@ -129,12 +131,94 @@ highclaw migrate openclaw
 
 > **Dev fallback (no global install):** prefix commands with `go run ./cmd/highclaw --` (example: `go run ./cmd/highclaw -- status`).
 
+## Session Flow: `agent -m` + `tui`
+
+HighClaw now uses one unified local session store (`~/.highclaw/sessions`) for both CLI and TUI:
+
+- Every `highclaw agent -m "..."` run is persisted as a **new session**.
+- `highclaw tui` loads those sessions in the left sidebar.
+- You can switch sessions in TUI and continue chatting from any saved context.
+- The sidebar groups sessions by source: **CLI / TUI / OTHER**.
+- Sidebar supports live filter: focus sidebar and type keywords.
+
+### TUI key actions
+
+- `Tab`: switch focus between sidebar and input
+- `↑` / `↓`: select session in sidebar
+- `Enter`: send message (input focus) / open session (sidebar focus)
+- `Ctrl+N`: create a new session
+- `Ctrl+R`: reload session list
+- `Ctrl+C`: quit
+
+### Quick verification
+
+```bash
+highclaw agent -m "first message"
+highclaw agent -m "second message"
+highclaw tui
+```
+
+You should see at least two new CLI-created sessions in the TUI sidebar.
+
+## Deployment Playbook (Windows / Ubuntu / CentOS / macOS)
+
+### macOS (Intel/Apple Silicon)
+
+```bash
+git clone https://github.com/903174293/highclaw.git
+cd highclaw
+make build
+./dist/highclaw onboard
+./dist/highclaw gateway
+```
+
+### Ubuntu (20.04/22.04/24.04)
+
+```bash
+sudo apt-get update
+sudo apt-get install -y make golang-go
+git clone https://github.com/903174293/highclaw.git
+cd highclaw
+make build
+sudo make install
+highclaw onboard
+highclaw daemon
+```
+
+### CentOS / RHEL / Rocky
+
+```bash
+sudo yum install -y make golang git
+git clone https://github.com/903174293/highclaw.git
+cd highclaw
+make build
+sudo make install
+highclaw onboard
+highclaw daemon
+```
+
+### Windows (PowerShell)
+
+```powershell
+git clone https://github.com/903174293/highclaw.git
+cd highclaw
+go build -o dist/highclaw.exe ./cmd/highclaw
+.\dist\highclaw.exe onboard
+.\dist\highclaw.exe gateway
+```
+
+### Why deployment is a product advantage
+
+- Single Go binary delivery minimizes environment drift.
+- Fast cold-start and low memory footprint improve edge/server density.
+- Same command surface across platforms reduces ops friction.
+
 ## Architecture
 
 Every subsystem is a **trait** — swap implementations with a config change, zero code changes.
 
 <p align="center">
-  <img src="docs/architecture.svg" alt="HighClaw Architecture" width="900" />
+  <img src="images/architecture.svg" alt="HighClaw Architecture" width="900" />
 </p>
 
 | Subsystem | Trait | Ships with | Extend |
@@ -526,4 +610,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Implement a trait, submit a PR:
 
 ---
 
-**HighClaw** — Zero overhead. Zero compromise. Deploy anywhere. Swap anything. <img src="highclaw.png" alt="HighClaw" style="height:1em;width:auto;vertical-align:-0.12em;" />
+**HighClaw** — High performance. Built for speed and reliability. Deploy anywhere. Swap anything. <img src="images/highclaw.png" alt="HighClaw" style="height:1em;width:auto;vertical-align:-0.12em;" />

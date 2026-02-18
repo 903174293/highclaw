@@ -15,6 +15,7 @@ import (
 type OpenAIClient struct {
 	APIKey  string
 	BaseURL string
+	Headers map[string]string
 	client  *http.Client
 }
 
@@ -25,6 +26,11 @@ func NewOpenAIClient(apiKey string) *OpenAIClient {
 
 // NewOpenAIClientWithBaseURL creates a new OpenAI-compatible API client.
 func NewOpenAIClientWithBaseURL(apiKey, baseURL string) *OpenAIClient {
+	return NewOpenAIClientWithBaseURLAndHeaders(apiKey, baseURL, nil)
+}
+
+// NewOpenAIClientWithBaseURLAndHeaders creates a new OpenAI-compatible API client with extra headers.
+func NewOpenAIClientWithBaseURLAndHeaders(apiKey, baseURL string, headers map[string]string) *OpenAIClient {
 	base := strings.TrimSpace(baseURL)
 	if base == "" {
 		base = "https://api.openai.com/v1"
@@ -33,6 +39,7 @@ func NewOpenAIClientWithBaseURL(apiKey, baseURL string) *OpenAIClient {
 	return &OpenAIClient{
 		APIKey:  apiKey,
 		BaseURL: base,
+		Headers: headers,
 		client: &http.Client{
 			Timeout: 120 * time.Second,
 		},
@@ -91,22 +98,8 @@ type OpenAIUsageStats struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
-// APIError represents a non-2xx provider HTTP response.
-type APIError struct {
-	StatusCode int
-	Body       string
-}
-
-func (e *APIError) Error() string {
-	return fmt.Sprintf("API error %d: %s", e.StatusCode, e.Body)
-}
-
 // Chat sends a chat request to the OpenAI API.
 func (c *OpenAIClient) Chat(ctx context.Context, req *OpenAIChatRequest) (*OpenAIChatResponse, error) {
-	if req.MaxTokens == 0 {
-		req.MaxTokens = 1200
-	}
-
 	reqBody, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -119,10 +112,16 @@ func (c *OpenAIClient) Chat(ctx context.Context, req *OpenAIChatRequest) (*OpenA
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	for k, v := range c.Headers {
+		if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
+			continue
+		}
+		httpReq.Header.Set(k, v)
+	}
 
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
+		return nil, fmt.Errorf("error sending request for url (%s)", c.BaseURL+"/chat/completions")
 	}
 	defer resp.Body.Close()
 
@@ -132,10 +131,7 @@ func (c *OpenAIClient) Chat(ctx context.Context, req *OpenAIChatRequest) (*OpenA
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, &APIError{
-			StatusCode: resp.StatusCode,
-			Body:       string(body),
-		}
+		return nil, newAPIError(resp.StatusCode, string(body))
 	}
 
 	var chatResp OpenAIChatResponse

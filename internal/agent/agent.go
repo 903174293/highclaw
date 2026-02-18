@@ -10,6 +10,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -48,6 +53,9 @@ type RunRequest struct {
 	Images       [][]byte
 	AgentID      string
 	SystemPrompt string
+	Provider     string
+	Model        string
+	Temperature  float64
 }
 
 // RunResult contains the outputs of an agent run.
@@ -108,10 +116,13 @@ func (r *Runner) Run(ctx context.Context, req *RunRequest) (*RunResult, error) {
 		modelResp, err := r.models.Chat(ctx, &ChatRequest{
 			SystemPrompt: systemPrompt,
 			Messages:     history,
-			MaxTokens:    1200,
+			Provider:     strings.TrimSpace(req.Provider),
+			Model:        strings.TrimSpace(req.Model),
+			MaxTokens:    0,
+			Temperature:  req.Temperature,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("model call failed: %w", err)
+			return nil, err
 		}
 		modelLatency := time.Since(modelStart)
 		totalUsage.merge(modelResp.Usage)
@@ -128,6 +139,7 @@ func (r *Runner) Run(ctx context.Context, req *RunRequest) (*RunResult, error) {
 			if reply == "" {
 				reply = strings.TrimSpace(modelResp.Content)
 			}
+			history = append(history, ChatMessage{Role: "assistant", Content: modelResp.Content})
 			return &RunResult{
 				Reply:      reply,
 				TokensUsed: totalUsage,
@@ -137,6 +149,7 @@ func (r *Runner) Run(ctx context.Context, req *RunRequest) (*RunResult, error) {
 		// Match ZeroClaw interactive behavior: print text produced alongside tool calls.
 		if strings.TrimSpace(text) != "" {
 			fmt.Print(text)
+			_ = os.Stdout.Sync()
 		}
 
 		var toolResults strings.Builder
@@ -158,7 +171,7 @@ func (r *Runner) Run(ctx context.Context, req *RunRequest) (*RunResult, error) {
 				"latency_ms", time.Since(toolStart).Milliseconds(),
 				"output_len", len(output),
 			)
-			fmt.Fprintf(&toolResults, "<tool_result>\n%s\n</tool_result>\n", output)
+			fmt.Fprintf(&toolResults, "<tool_result name=\"%s\">\n%s\n</tool_result>\n", call.Name, output)
 		}
 
 		history = append(history, ChatMessage{Role: "assistant", Content: modelResp.Content})
@@ -168,17 +181,26 @@ func (r *Runner) Run(ctx context.Context, req *RunRequest) (*RunResult, error) {
 		})
 	}
 
-	return nil, fmt.Errorf("agent exceeded maximum tool iterations (%d)", maxToolIterations)
+	return nil, fmt.Errorf("Agent exceeded maximum tool iterations (%d)", maxToolIterations)
 }
 
 // buildSystemPrompt constructs the system prompt from config, skills, and context.
 func (r *Runner) buildSystemPrompt(req *RunRequest) string {
+	if req.SystemPrompt != "" {
+		return req.SystemPrompt
+	}
+
 	var b strings.Builder
 	b.WriteString("You are HighClaw, a personal AI assistant.\n\n")
+	b.WriteString("## Tools\n\n")
+	b.WriteString("You have access to the following tools:\n\n")
+	for _, spec := range r.tools.Specs() {
+		fmt.Fprintf(&b, "- **%s**: %s\n", spec.Name, spec.Description)
+	}
+	b.WriteString("\n")
 	b.WriteString("## Tool Use Protocol\n\n")
-	b.WriteString("To use a tool, wrap a JSON object in <invoke></invoke> tags (preferred), or <tool_call></tool_call>:\n\n")
+	b.WriteString("To use a tool, wrap a JSON object in <tool_call></tool_call> tags:\n\n")
 	b.WriteString("```\n<tool_call>\n{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n</tool_call>\n```\n\n")
-	b.WriteString("```\n<invoke>\n{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n</invoke>\n```\n\n")
 	b.WriteString("You may use multiple tool calls in a single response. ")
 	b.WriteString("After tool execution, results appear in <tool_result> tags. ")
 	b.WriteString("Continue reasoning with the results until you can give a final answer.\n\n")
@@ -186,11 +208,46 @@ func (r *Runner) buildSystemPrompt(req *RunRequest) string {
 	for _, spec := range r.tools.Specs() {
 		fmt.Fprintf(&b, "**%s**: %s\nParameters: `%s`\n\n", spec.Name, spec.Description, spec.Parameters)
 	}
-	prompt := b.String()
-	if req.SystemPrompt != "" {
-		prompt = req.SystemPrompt
+
+	b.WriteString("## Safety\n\n")
+	b.WriteString("- Do not exfiltrate private data.\n")
+	b.WriteString("- Do not run destructive commands without asking.\n")
+	b.WriteString("- Do not bypass oversight or approval mechanisms.\n")
+	b.WriteString("- Prefer `trash` over `rm` (recoverable beats gone forever).\n")
+	b.WriteString("- When in doubt, ask before acting externally.\n\n")
+
+	workspace := strings.TrimSpace(r.cfg.Agent.Workspace)
+	if workspace == "" {
+		workspace = filepath.Join(config.ConfigDir(), "workspace")
 	}
-	return prompt
+
+	fmt.Fprintf(&b, "## Workspace\n\nWorking directory: `%s`\n\n", workspace)
+	b.WriteString("## Project Context\n\n")
+	for _, name := range []string{
+		"IDENTITY.md", "AGENTS.md", "HEARTBEAT.md", "SOUL.md",
+		"USER.md", "TOOLS.md", "BOOTSTRAP.md", "MEMORY.md",
+	} {
+		path := filepath.Join(workspace, name)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		fmt.Fprintf(&b, "### %s\n\n%s\n\n", name, strings.TrimSpace(string(content)))
+	}
+
+	now := time.Now()
+	fmt.Fprintf(&b, "## Current Date & Time\n\nTimezone: %s\n\n", now.Format("MST"))
+
+	host, err := os.Hostname()
+	if err != nil || strings.TrimSpace(host) == "" {
+		host = "unknown"
+	}
+	modelName := strings.TrimSpace(req.Model)
+	if modelName == "" {
+		modelName = strings.TrimSpace(r.cfg.Agent.Model)
+	}
+	fmt.Fprintf(&b, "## Runtime\n\nHost: %s | OS: %s | Model: %s\n", host, runtime.GOOS, modelName)
+	return b.String()
 }
 
 // ModelManager handles model provider selection and API calls.
@@ -213,6 +270,7 @@ func NewModelManager(cfg *config.Config, logger *slog.Logger) *ModelManager {
 type ChatRequest struct {
 	SystemPrompt  string
 	Messages      []ChatMessage
+	Provider      string
 	Model         string
 	MaxTokens     int
 	Temperature   float64
@@ -237,41 +295,233 @@ func (m *ModelManager) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 	if model == "" {
 		model = m.cfg.Agent.Model
 	}
-	if req.MaxTokens <= 0 {
-		req.MaxTokens = 1200
-	}
 	if req.Temperature == 0 {
 		// Align with ZeroClaw default_temperature.
 		req.Temperature = 0.7
 	}
 
-	// Determine provider from model string (e.g., "anthropic/claude-opus-4"),
-	// aligned with ZeroClaw provider-factory style.
-	provider, modelName := parseModelString(model)
-	m.logger.Debug("calling model", "provider", provider, "model", modelName)
+	// Resolve hint routes (hint:xxx) before primary provider selection.
+	routeProvider, routeModel, routed := m.resolveHintRoute(model)
+	effectiveModel := model
+	if routed {
+		effectiveModel = routeModel
+	}
 
-	p, err := m.factory.Create(provider, m.cfg)
-	if err != nil {
-		return nil, err
+	// Determine provider/model with ZeroClaw-like priority:
+	// hint route provider > provider override > configured primary > model prefix.
+	provider := m.resolvePrimaryProvider(req.Provider, effectiveModel)
+	if routeProvider != "" {
+		provider = routeProvider
 	}
-	const maxAttempts = 3
-	attemptErrors := make([]string, 0, maxAttempts)
-	for i := 1; i <= maxAttempts; i++ {
-		resp, err := p.Chat(ctx, req, modelName)
-		if err == nil {
-			return resp, nil
-		}
-		attemptErrors = append(attemptErrors, fmt.Sprintf(
-			"%s attempt %d/%d: %s",
-			provider, i, maxAttempts, formatProviderError(provider, err),
-		))
-		if isNonRetryableProviderError(err) {
-			m.logger.Warn("Non-retryable error, switching provider", "provider", provider)
-			break
-		}
+	modelName := normalizeModelForProvider(effectiveModel, provider)
+
+	candidates := m.providerCandidates(provider)
+	maxAttempts := int(m.cfg.Reliability.ProviderRetries) + 1
+	if maxAttempts <= 0 {
+		maxAttempts = 3
 	}
-	m.logger.Warn("Switching to fallback provider", "provider", provider)
+	baseBackoff := time.Duration(m.cfg.Reliability.ProviderBackoffMs) * time.Millisecond
+	if baseBackoff <= 0 {
+		baseBackoff = 500 * time.Millisecond
+	}
+	attemptErrors := make([]string, 0, len(candidates)*maxAttempts)
+
+	for _, candidate := range candidates {
+		p, err := m.factory.Create(candidate, m.cfg)
+		if err != nil {
+			msg := normalizeProviderCreateError(candidate, err)
+			for i := 1; i <= maxAttempts; i++ {
+				attemptErrors = append(attemptErrors, fmt.Sprintf(
+					"%s attempt %d/%d: %s",
+					candidate, i, maxAttempts, msg,
+				))
+			}
+			continue
+		}
+
+		for i := 1; i <= maxAttempts; i++ {
+			m.logger.Debug("calling model", "provider", candidate, "model", modelName)
+			resp, err := p.Chat(ctx, req, modelName)
+			if err == nil {
+				if i > 1 {
+					m.logger.Info("Provider recovered after retries", "provider", candidate, "attempt", i-1)
+				}
+				return resp, nil
+			}
+			attemptErrors = append(attemptErrors, fmt.Sprintf(
+				"%s attempt %d/%d: %s",
+				candidate, i, maxAttempts, formatProviderError(candidate, err),
+			))
+			if isNonRetryableProviderError(err) {
+				m.logger.Warn("Non-retryable error, switching provider", "provider", candidate)
+				break
+			}
+
+			if i < maxAttempts {
+				m.logger.Warn("Provider call failed, retrying", "provider", candidate, "attempt", i, "max_retries", maxAttempts-1)
+				backoff := baseBackoff * time.Duration(1<<(i-1))
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(backoff):
+				}
+			}
+		}
+		// Match ZeroClaw reliable-provider logs: emit this after each provider cycle.
+		m.logger.Warn("Switching to fallback provider", "provider", candidate)
+	}
 	return nil, fmt.Errorf("All providers failed. Attempts:\n%s", strings.Join(attemptErrors, "\n"))
+}
+
+func normalizeProviderCreateError(provider string, err error) string {
+	msg := strings.TrimSpace(err.Error())
+	lower := strings.ToLower(msg)
+	if strings.Contains(lower, "api key not configured") {
+		upper := strings.ToUpper(strings.TrimSpace(provider))
+		if upper == "" {
+			upper = "PROVIDER"
+		}
+		return fmt.Sprintf("%s API key not set. Run `highclaw onboard` or set the appropriate env var.", upper)
+	}
+	return msg
+}
+
+func (m *ModelManager) providerCandidates(primary string) []string {
+	primary = normalizeProviderName(primary)
+	if primary == "" {
+		primary = "openrouter"
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 4)
+	add := func(name string, validate bool) {
+		name = normalizeProviderName(name)
+		if name == "" {
+			return
+		}
+		if validate && !m.factory.Has(name) {
+			m.logger.Warn("Ignoring invalid fallback provider", "fallback_provider", name)
+			return
+		}
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+
+	// Always keep primary candidate; validation happens at create-call stage.
+	add(primary, false)
+	for _, name := range m.cfg.Reliability.FallbackProviders {
+		add(name, true)
+	}
+	if len(out) == 0 {
+		out = append(out, "openrouter")
+	}
+	return out
+}
+
+func (m *ModelManager) resolvePrimaryProvider(override, model string) string {
+	if p := strings.ToLower(strings.TrimSpace(override)); p != "" {
+		return p
+	}
+	// Explicit provider/model syntax should always take precedence.
+	// This avoids misrouting (e.g., glm/glm-5 sent to openrouter) when key resolution
+	// happens via env/route-specific config later.
+	if prefix, _, ok := splitModelPrefix(model); ok {
+		return prefix
+	}
+	// ZeroClaw commonly defaults to openrouter when configured.
+	if m.hasProviderConfigured("openrouter") {
+		return "openrouter"
+	}
+	// Fallback to first configured provider deterministically.
+	keys := make([]string, 0, len(m.cfg.Agent.Providers))
+	for k, pcfg := range m.cfg.Agent.Providers {
+		if strings.TrimSpace(pcfg.APIKey) != "" {
+			keys = append(keys, strings.ToLower(strings.TrimSpace(k)))
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) > 0 {
+		return keys[0]
+	}
+	return "openrouter"
+}
+
+func (m *ModelManager) resolveHintRoute(model string) (provider, resolvedModel string, ok bool) {
+	hint, hasHint := strings.CutPrefix(strings.TrimSpace(model), "hint:")
+	if !hasHint {
+		return "", "", false
+	}
+	hint = strings.TrimSpace(hint)
+	if hint == "" {
+		return "", "", false
+	}
+	for _, route := range m.cfg.ModelRoutes {
+		if strings.TrimSpace(route.Hint) != hint {
+			continue
+		}
+		p := strings.ToLower(strings.TrimSpace(route.Provider))
+		rm := strings.TrimSpace(route.Model)
+		if p == "" || rm == "" {
+			continue
+		}
+		return p, rm, true
+	}
+	m.logger.Warn("Unknown route hint, falling back to default provider", "hint", hint)
+	return "", "", false
+}
+
+func normalizeModelForProvider(model, provider string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return model
+	}
+	prefix, rest, ok := splitModelPrefix(model)
+	if !ok {
+		return model
+	}
+	// Keep full "vendor/model" for gateway-style providers (notably openrouter).
+	if provider == "openrouter" {
+		// Backward compatibility: onboard may persist "openrouter/<vendor>/<model>".
+		// OpenRouter expects "<vendor>/<model>", so strip only a leading openrouter prefix.
+		if prefix == "openrouter" {
+			return rest
+		}
+		return model
+	}
+	// If provider matches prefix, pass the raw model id.
+	if provider == prefix {
+		return rest
+	}
+	// Cross-provider explicit model path should be preserved.
+	return model
+}
+
+func splitModelPrefix(model string) (prefix, rest string, ok bool) {
+	model = strings.TrimSpace(model)
+	lm := strings.ToLower(model)
+	if strings.HasPrefix(lm, "custom:http://") || strings.HasPrefix(lm, "custom:https://") ||
+		strings.HasPrefix(lm, "anthropic-custom:http://") || strings.HasPrefix(lm, "anthropic-custom:https://") {
+		// custom provider identifiers contain URL slashes, so split at the last slash.
+		// Format: custom:https://host/path/<model-id>
+		idx := strings.LastIndex(model, "/")
+		if idx <= 0 || idx >= len(model)-1 {
+			return "", "", false
+		}
+		return strings.TrimSpace(model[:idx]), strings.TrimSpace(model[idx+1:]), true
+	}
+	for i, ch := range model {
+		if ch == '/' {
+			return strings.ToLower(strings.TrimSpace(model[:i])), strings.TrimSpace(model[i+1:]), true
+		}
+	}
+	return "", "", false
+}
+
+func (m *ModelManager) hasProviderConfigured(provider string) bool {
+	_, ok := resolveProviderConfig(m.cfg, provider)
+	return ok
 }
 
 // parseModelString splits "provider/model" into components.
@@ -303,35 +553,44 @@ type ProviderFactory struct {
 func NewProviderFactory() *ProviderFactory {
 	f := &ProviderFactory{builders: map[string]ProviderBuilder{}}
 	f.Register("anthropic", func(cfg *config.Config) (Provider, error) {
-		pcfg, ok := cfg.Agent.Providers["anthropic"]
-		if !ok || strings.TrimSpace(pcfg.APIKey) == "" {
+		pcfg, ok := resolveProviderConfig(cfg, "anthropic")
+		if !ok {
 			return nil, fmt.Errorf("anthropic API key not configured")
 		}
 		return &anthropicProvider{client: providers.NewAnthropicClient(pcfg.APIKey)}, nil
 	})
 	f.Register("openai", func(cfg *config.Config) (Provider, error) {
-		pcfg, ok := cfg.Agent.Providers["openai"]
-		if !ok || strings.TrimSpace(pcfg.APIKey) == "" {
+		pcfg, ok := resolveProviderConfig(cfg, "openai")
+		if !ok {
 			return nil, fmt.Errorf("openai API key not configured")
 		}
 		return &openAIProvider{client: providers.NewOpenAIClientWithBaseURL(pcfg.APIKey, pcfg.BaseURL)}, nil
 	})
 	f.Register("openrouter", func(cfg *config.Config) (Provider, error) {
-		pcfg, ok := cfg.Agent.Providers["openrouter"]
-		if !ok || strings.TrimSpace(pcfg.APIKey) == "" {
+		pcfg, ok := resolveProviderConfig(cfg, "openrouter")
+		if !ok {
 			return nil, fmt.Errorf("openrouter API key not configured")
 		}
 		baseURL := strings.TrimSpace(pcfg.BaseURL)
 		if baseURL == "" {
 			baseURL = "https://openrouter.ai/api/v1"
 		}
-		return &openAIProvider{client: providers.NewOpenAIClientWithBaseURL(pcfg.APIKey, baseURL)}, nil
+		return &openAIProvider{client: providers.NewOpenAIClientWithBaseURLAndHeaders(
+			pcfg.APIKey,
+			baseURL,
+			map[string]string{
+				"HTTP-Referer": "https://github.com/highclaw/highclaw",
+				"X-Title":      "HighClaw",
+			},
+		)}, nil
 	})
 	registerOpenAICompatProviders(f,
-		"venice", "deepseek", "mistral", "xai", "perplexity", "groq",
-		"fireworks", "together", "cohere", "moonshot", "glm", "zhipu",
-		"zai", "z.ai", "minimax", "qianfan", "vercel", "cloudflare",
-		"opencode", "synthetic", "gemini",
+		"venice", "deepseek", "mistral", "xai", "grok", "perplexity", "groq",
+		"fireworks", "fireworks-ai", "together", "together-ai", "cohere",
+		"moonshot", "kimi", "glm", "zhipu", "zai", "z.ai", "minimax",
+		"qianfan", "baidu", "vercel", "vercel-ai", "cloudflare", "cloudflare-ai",
+		"opencode", "opencode-zen", "synthetic", "gemini", "google", "google-gemini",
+		"bedrock", "aws-bedrock",
 	)
 	return f
 }
@@ -340,21 +599,8 @@ func registerOpenAICompatProviders(f *ProviderFactory, names ...string) {
 	for _, name := range names {
 		providerName := name
 		f.Register(providerName, func(cfg *config.Config) (Provider, error) {
-			pcfg, ok := cfg.Agent.Providers[providerName]
+			pcfg, ok := resolveProviderConfig(cfg, providerName)
 			if !ok {
-				// Alias fallback (z.ai <-> zai, zhipu <-> glm)
-				switch providerName {
-				case "z.ai":
-					pcfg, ok = cfg.Agent.Providers["zai"]
-				case "zai":
-					pcfg, ok = cfg.Agent.Providers["z.ai"]
-				case "zhipu":
-					pcfg, ok = cfg.Agent.Providers["glm"]
-				case "glm":
-					pcfg, ok = cfg.Agent.Providers["zhipu"]
-				}
-			}
-			if !ok || strings.TrimSpace(pcfg.APIKey) == "" {
 				return nil, fmt.Errorf("%s API key not configured", providerName)
 			}
 			baseURL := strings.TrimSpace(pcfg.BaseURL)
@@ -374,33 +620,168 @@ func defaultBaseURLForProvider(provider string) string {
 	case "openrouter":
 		return "https://openrouter.ai/api/v1"
 	case "deepseek":
-		return "https://api.deepseek.com/v1"
+		return "https://api.deepseek.com"
 	case "groq":
-		return "https://api.groq.com/openai/v1"
+		return "https://api.groq.com/openai"
 	case "mistral":
-		return "https://api.mistral.ai/v1"
+		return "https://api.mistral.ai"
 	case "together":
-		return "https://api.together.xyz/v1"
+		return "https://api.together.xyz"
+	case "together-ai":
+		return "https://api.together.xyz"
 	case "fireworks":
-		return "https://api.fireworks.ai/inference/v1"
+		return "https://api.fireworks.ai/inference"
+	case "fireworks-ai":
+		return "https://api.fireworks.ai/inference"
 	case "cohere":
-		return "https://api.cohere.com/compatibility/v1"
-	case "moonshot":
-		return "https://api.moonshot.cn/v1"
+		return "https://api.cohere.com/compatibility"
+	case "moonshot", "kimi":
+		return "https://api.moonshot.cn"
 	case "glm", "zhipu", "zai", "z.ai":
 		return "https://open.bigmodel.cn/api/paas/v4"
 	case "xai":
-		return "https://api.x.ai/v1"
+		return "https://api.x.ai"
 	case "perplexity":
 		return "https://api.perplexity.ai"
-	case "vercel":
-		return "https://ai-gateway.vercel.sh/v1"
-	case "cloudflare":
-		return "https://api.cloudflare.com/client/v4/accounts"
+	case "vercel", "vercel-ai":
+		return "https://api.vercel.ai"
+	case "cloudflare", "cloudflare-ai":
+		return "https://gateway.ai.cloudflare.com/v1"
+	case "bedrock", "aws-bedrock":
+		return "https://bedrock-runtime.us-east-1.amazonaws.com"
+	case "qianfan", "baidu":
+		return "https://aip.baidubce.com"
+	case "opencode", "opencode-zen":
+		return "https://api.opencode.ai"
+	case "grok":
+		return "https://api.x.ai"
 	case "gemini":
+		return "https://generativelanguage.googleapis.com/v1beta/openai"
+	case "google", "google-gemini":
 		return "https://generativelanguage.googleapis.com/v1beta/openai"
 	}
 	return ""
+}
+
+func resolveProviderConfig(cfg *config.Config, provider string) (config.ProviderConfig, bool) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	aliases := providerAliases(provider)
+	for _, key := range aliases {
+		if pcfg, ok := cfg.Agent.Providers[key]; ok {
+			pcfg.APIKey = strings.TrimSpace(pcfg.APIKey)
+			if pcfg.APIKey != "" {
+				return pcfg, true
+			}
+		}
+	}
+	// Route-scoped API key support (ZeroClaw parity): allow model route entries
+	// to carry provider-specific keys even when Agent.Providers is not populated.
+	for _, route := range cfg.ModelRoutes {
+		rp := strings.ToLower(strings.TrimSpace(route.Provider))
+		if rp == "" {
+			continue
+		}
+		for _, alias := range aliases {
+			if rp != alias {
+				continue
+			}
+			if k := strings.TrimSpace(route.APIKey); k != "" {
+				return config.ProviderConfig{
+					APIKey:  k,
+					BaseURL: defaultBaseURLForProvider(provider),
+				}, true
+			}
+		}
+	}
+
+	// Environment override (matches ZeroClaw-style provider env precedence).
+	for _, envKey := range providerEnvCandidates(provider) {
+		if v := strings.TrimSpace(os.Getenv(envKey)); v != "" {
+			return config.ProviderConfig{
+				APIKey:  v,
+				BaseURL: defaultBaseURLForProvider(provider),
+			}, true
+		}
+	}
+	for _, envKey := range []string{"HIGHCLAW_API_KEY", "OPENCLAW_API_KEY", "ZEROCLAW_API_KEY", "API_KEY"} {
+		if v := strings.TrimSpace(os.Getenv(envKey)); v != "" {
+			return config.ProviderConfig{
+				APIKey:  v,
+				BaseURL: defaultBaseURLForProvider(provider),
+			}, true
+		}
+	}
+	return config.ProviderConfig{}, false
+}
+
+func providerAliases(provider string) []string {
+	switch provider {
+	case "z.ai":
+		return []string{"z.ai", "zai"}
+	case "zai":
+		return []string{"zai", "z.ai"}
+	case "zhipu":
+		return []string{"zhipu", "glm"}
+	case "glm":
+		return []string{"glm", "zhipu"}
+	case "google", "google-gemini":
+		return []string{"google", "google-gemini", "gemini"}
+	case "gemini":
+		return []string{"gemini", "google", "google-gemini"}
+	}
+	return []string{provider}
+}
+
+func providerEnvCandidates(provider string) []string {
+	switch provider {
+	case "anthropic":
+		return []string{"ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"}
+	case "openrouter":
+		return []string{"OPENROUTER_API_KEY"}
+	case "openai":
+		return []string{"OPENAI_API_KEY"}
+	case "venice":
+		return []string{"VENICE_API_KEY"}
+	case "groq":
+		return []string{"GROQ_API_KEY"}
+	case "mistral":
+		return []string{"MISTRAL_API_KEY"}
+	case "deepseek":
+		return []string{"DEEPSEEK_API_KEY"}
+	case "xai":
+		return []string{"XAI_API_KEY"}
+	case "together", "together-ai":
+		return []string{"TOGETHER_API_KEY"}
+	case "fireworks", "fireworks-ai":
+		return []string{"FIREWORKS_API_KEY"}
+	case "perplexity":
+		return []string{"PERPLEXITY_API_KEY"}
+	case "cohere":
+		return []string{"COHERE_API_KEY"}
+	case "moonshot", "kimi":
+		return []string{"MOONSHOT_API_KEY"}
+	case "glm", "zhipu":
+		return []string{"GLM_API_KEY"}
+	case "minimax":
+		return []string{"MINIMAX_API_KEY"}
+	case "qianfan", "baidu":
+		return []string{"QIANFAN_API_KEY"}
+	case "zai", "z.ai":
+		return []string{"ZAI_API_KEY"}
+	case "synthetic":
+		return []string{"SYNTHETIC_API_KEY"}
+	case "opencode", "opencode-zen":
+		return []string{"OPENCODE_API_KEY"}
+	case "vercel", "vercel-ai":
+		return []string{"VERCEL_API_KEY"}
+	case "cloudflare", "cloudflare-ai":
+		return []string{"CLOUDFLARE_API_KEY"}
+	case "gemini", "google", "google-gemini":
+		return []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}
+	case "bedrock", "aws-bedrock":
+		return []string{"AWS_BEDROCK_API_KEY", "BEDROCK_API_KEY"}
+	}
+	return nil
 }
 
 // Register registers a provider builder.
@@ -408,13 +789,106 @@ func (f *ProviderFactory) Register(name string, builder ProviderBuilder) {
 	f.builders[name] = builder
 }
 
+// Has reports whether provider name can be resolved by this factory.
+func (f *ProviderFactory) Has(name string) bool {
+	name = strings.TrimSpace(name)
+	lower := strings.ToLower(name)
+	if strings.HasPrefix(lower, "custom:") || strings.HasPrefix(lower, "anthropic-custom:") {
+		return true
+	}
+	_, ok := f.builders[lower]
+	return ok
+}
+
+func normalizeProviderName(name string) string {
+	n := strings.TrimSpace(name)
+	if n == "" {
+		return ""
+	}
+	lower := strings.ToLower(n)
+	if strings.HasPrefix(lower, "custom:") || strings.HasPrefix(lower, "anthropic-custom:") {
+		return n
+	}
+	return lower
+}
+
 // Create instantiates a provider by name.
 func (f *ProviderFactory) Create(name string, cfg *config.Config) (Provider, error) {
+	name = strings.TrimSpace(name)
+	if strings.HasPrefix(name, "custom:") {
+		baseURL, err := parseCustomProviderURL(strings.TrimPrefix(name, "custom:"), "Custom provider", "custom:https://your-api.com")
+		if err != nil {
+			return nil, err
+		}
+		pcfg := config.ProviderConfig{}
+		if byExact, ok := cfg.Agent.Providers[name]; ok {
+			pcfg = byExact
+		} else if byGeneric, ok := cfg.Agent.Providers["custom"]; ok {
+			pcfg = byGeneric
+		}
+		if strings.TrimSpace(pcfg.APIKey) == "" {
+			for _, k := range []string{"OPENAI_API_KEY", "HIGHCLAW_API_KEY", "OPENCLAW_API_KEY", "ZEROCLAW_API_KEY", "API_KEY"} {
+				if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+					pcfg.APIKey = v
+					break
+				}
+			}
+		}
+		if strings.TrimSpace(pcfg.APIKey) == "" {
+			return nil, fmt.Errorf("custom API key not configured")
+		}
+		return &openAIProvider{client: providers.NewOpenAIClientWithBaseURL(pcfg.APIKey, baseURL)}, nil
+	}
+	if strings.HasPrefix(name, "anthropic-custom:") {
+		baseURL, err := parseCustomProviderURL(strings.TrimPrefix(name, "anthropic-custom:"), "Anthropic-custom provider", "anthropic-custom:https://your-api.com")
+		if err != nil {
+			return nil, err
+		}
+		pcfg := config.ProviderConfig{}
+		if byExact, ok := cfg.Agent.Providers[name]; ok {
+			pcfg = byExact
+		} else if byGeneric, ok := cfg.Agent.Providers["anthropic-custom"]; ok {
+			pcfg = byGeneric
+		}
+		if strings.TrimSpace(pcfg.APIKey) == "" {
+			pcfg, _ = resolveProviderConfig(cfg, "anthropic")
+		}
+		if strings.TrimSpace(pcfg.APIKey) == "" {
+			for _, k := range []string{"ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "HIGHCLAW_API_KEY", "OPENCLAW_API_KEY", "ZEROCLAW_API_KEY", "API_KEY"} {
+				if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+					pcfg.APIKey = v
+					break
+				}
+			}
+		}
+		if strings.TrimSpace(pcfg.APIKey) == "" {
+			return nil, fmt.Errorf("anthropic-custom API key not configured")
+		}
+		return &anthropicProvider{client: providers.NewAnthropicClientWithBaseURL(pcfg.APIKey, baseURL)}, nil
+	}
 	builder, ok := f.builders[name]
 	if !ok {
-		return nil, fmt.Errorf("unknown provider: %s", name)
+		return nil, fmt.Errorf("unknown provider: %s. check README for supported providers or run `highclaw onboard --interactive` to reconfigure.\nTip: use \"custom:https://your-api.com\" for OpenAI-compatible endpoints.\nTip: use \"anthropic-custom:https://your-api.com\" for Anthropic-compatible endpoints.", name)
 	}
 	return builder(cfg)
+}
+
+func parseCustomProviderURL(raw, label, example string) (string, error) {
+	u := strings.TrimSpace(raw)
+	if u == "" {
+		return "", fmt.Errorf("%s URL is empty (example: %s)", label, example)
+	}
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return "", fmt.Errorf("%s URL is invalid: %w", label, err)
+	}
+	if parsed.Scheme != "https" && parsed.Scheme != "http" {
+		return "", fmt.Errorf("%s URL must use http or https", label)
+	}
+	if strings.TrimSpace(parsed.Host) == "" {
+		return "", fmt.Errorf("%s URL must include a host", label)
+	}
+	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
 type anthropicProvider struct {
@@ -441,7 +915,7 @@ func (p *anthropicProvider) Chat(ctx context.Context, req *ChatRequest, model st
 	}
 	resp, err := p.client.Chat(ctx, anthropicReq)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic API call: %w", err)
+		return nil, err
 	}
 	return &ChatResponse{
 		Content: providers.ExtractTextContent(resp.Content),
@@ -480,7 +954,7 @@ func (p *openAIProvider) Chat(ctx context.Context, req *ChatRequest, model strin
 	}
 	resp, err := p.client.Chat(ctx, openAIReq)
 	if err != nil {
-		return nil, fmt.Errorf("openai API call: %w", err)
+		return nil, err
 	}
 	var content string
 	if len(resp.Choices) > 0 {
@@ -528,9 +1002,8 @@ type ParsedToolCall struct {
 }
 
 // parseToolCalls supports:
-// 1) XML-style: <invoke>{"name":"shell","arguments":{...}}</invoke>
-// 2) XML-style: <tool_call>{"name":"bash","arguments":{...}}</tool_call>
-// 3) OpenAI-style JSON with tool_calls array.
+// 1) XML-style: <tool_call>{"name":"bash","arguments":{...}}</tool_call>
+// 2) OpenAI-style JSON with tool_calls array.
 func parseToolCalls(response string) (string, []ParsedToolCall) {
 	textParts := make([]string, 0, 2)
 	calls := make([]ParsedToolCall, 0)
@@ -554,40 +1027,6 @@ func parseToolCalls(response string) (string, []ParsedToolCall) {
 	}
 
 	remaining := response
-	// Parse <invoke> tags first (ZeroClaw-style).
-	for {
-		start := strings.Index(remaining, "<invoke>")
-		if start == -1 {
-			break
-		}
-		before := strings.TrimSpace(remaining[:start])
-		if before != "" {
-			textParts = append(textParts, before)
-		}
-		rest := remaining[start+len("<invoke>"):]
-		end := strings.Index(rest, "</invoke>")
-		if end == -1 {
-			remaining = rest
-			break
-		}
-		body := strings.TrimSpace(rest[:end])
-		parsedAny := false
-		for _, value := range extractJSONValues(body) {
-			extracted := parseToolCallsFromAny(value)
-			if len(extracted) > 0 {
-				parsedAny = true
-				calls = append(calls, extracted...)
-			}
-		}
-		if !parsedAny {
-			call := parseToolCallJSON(body)
-			if call != nil {
-				calls = append(calls, *call)
-			}
-		}
-		remaining = rest[end+len("</invoke>"):]
-	}
-
 	// Parse <tool_call> tags as fallback/compatibility.
 	for {
 		start := strings.Index(remaining, "<tool_call>")
@@ -675,27 +1114,24 @@ func extractJSONValues(input string) []any {
 		return append(values, direct)
 	}
 
-	dec := json.NewDecoder(strings.NewReader(trimmed))
-	for {
-		var v any
-		if err := dec.Decode(&v); err != nil {
-			break
-		}
-		values = append(values, v)
-	}
-
-	// fallback: scan candidate starts and decode from slice
-	runes := []rune(trimmed)
-	for i, ch := range runes {
+	// ZeroClaw parity: scan candidate JSON starts and decode non-overlapping values.
+	for i := 0; i < len(trimmed); i++ {
+		ch := trimmed[i]
 		if ch != '{' && ch != '[' {
 			continue
 		}
-		slice := string(runes[i:])
-		dec2 := json.NewDecoder(strings.NewReader(slice))
+		dec := json.NewDecoder(strings.NewReader(trimmed[i:]))
 		var v any
-		if err := dec2.Decode(&v); err == nil {
-			values = append(values, v)
+		if err := dec.Decode(&v); err != nil {
+			continue
 		}
+		consumed := int(dec.InputOffset())
+		if consumed <= 0 {
+			continue
+		}
+		values = append(values, v)
+		// Move cursor to the end of this decoded JSON value.
+		i += consumed - 1
 	}
 	return values
 }
@@ -763,7 +1199,7 @@ type ToolRegistry struct {
 	tools  map[string]ToolSpec
 	policy *SecurityPolicy
 	logger *slog.Logger
-	memory *sqliteMemoryStore
+	memory memoryStore
 }
 
 // ToolHandler is the function signature for tool implementations.
@@ -779,16 +1215,31 @@ type ToolSpec struct {
 
 // NewToolRegistry creates a new tool registry with built-in tools.
 func NewToolRegistry(cfg *config.Config, logger *slog.Logger) *ToolRegistry {
+	backend := strings.ToLower(strings.TrimSpace(cfg.Memory.Backend))
+	if backend == "" {
+		backend = "sqlite"
+	}
+	var store memoryStore
+	switch backend {
+	case "none":
+		store = newDisabledMemoryStore()
+	case "markdown":
+		store = newMarkdownMemoryStore(cfg.Agent.Workspace)
+	default:
+		backend = "sqlite"
+		store = newSQLiteMemoryStore()
+	}
+
 	reg := &ToolRegistry{
 		tools:  make(map[string]ToolSpec),
 		policy: NewSecurityPolicy(cfg),
 		logger: logger.With("component", "memory"),
-		memory: newSQLiteMemoryStore(),
+		memory: store,
 	}
-	if err := reg.memory.init(); err != nil {
-		reg.logger.Error("memory sqlite init failed", "error", err)
+	if err := store.init(); err != nil {
+		reg.logger.Error("memory init failed", "backend", backend, "error", err)
 	} else {
-		reg.logger.Info("memory initialized", "backend", "sqlite", "db", reg.memory.dbPath, "auto_save", true)
+		reg.logger.Info("memory initialized", "backend", backend, "db", store.location(), "auto_save", cfg.Memory.AutoSave)
 	}
 
 	// Register built-in tools.
@@ -817,6 +1268,9 @@ func (r *ToolRegistry) Specs() []ToolSpec {
 	for _, s := range r.tools {
 		specs = append(specs, s)
 	}
+	sort.Slice(specs, func(i, j int) bool {
+		return specs[i].Name < specs[j].Name
+	})
 	return specs
 }
 
@@ -965,9 +1419,31 @@ func intValue(v any, fallback int) int {
 func isNonRetryableProviderError(err error) bool {
 	var apiErr *providers.APIError
 	if errors.As(err, &apiErr) {
-		switch apiErr.StatusCode {
-		case http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusForbidden, http.StatusNotFound, http.StatusBadRequest:
-			return true
+		code := apiErr.StatusCode
+		if code >= 400 && code < 500 {
+			// 429 / 408 are transient and should remain retryable.
+			return code != http.StatusTooManyRequests && code != http.StatusRequestTimeout
+		}
+		return false
+	}
+	// ZeroClaw parity: fallback string scan for 4xx codes when error wrappers hide typed status.
+	msg := err.Error()
+	current := ""
+	for _, r := range msg {
+		if r >= '0' && r <= '9' {
+			current += string(r)
+			continue
+		}
+		if current != "" {
+			if code, convErr := strconv.Atoi(current); convErr == nil && code >= 400 && code < 500 {
+				return code != http.StatusTooManyRequests && code != http.StatusRequestTimeout
+			}
+			current = ""
+		}
+	}
+	if current != "" {
+		if code, convErr := strconv.Atoi(current); convErr == nil && code >= 400 && code < 500 {
+			return code != http.StatusTooManyRequests && code != http.StatusRequestTimeout
 		}
 	}
 	return false
@@ -993,6 +1469,30 @@ func providerDisplayName(provider string) string {
 		return "OpenAI"
 	case "anthropic":
 		return "Anthropic"
+	case "glm", "zhipu":
+		return "GLM"
+	case "zai", "z.ai":
+		return "Z.AI"
+	case "xai", "grok":
+		return "xAI"
+	case "minimax":
+		return "MiniMax"
+	case "qianfan", "baidu":
+		return "Qianfan"
+	case "opencode", "opencode-zen":
+		return "OpenCode Zen"
+	case "together", "together-ai":
+		return "Together AI"
+	case "fireworks", "fireworks-ai":
+		return "Fireworks AI"
+	case "cloudflare", "cloudflare-ai":
+		return "Cloudflare AI"
+	case "vercel", "vercel-ai":
+		return "Vercel AI Gateway"
+	case "moonshot", "kimi":
+		return "Moonshot"
+	case "bedrock", "aws-bedrock":
+		return "Amazon Bedrock"
 	default:
 		if provider == "" {
 			return "Provider"

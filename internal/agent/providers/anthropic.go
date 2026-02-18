@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -20,9 +21,19 @@ type AnthropicClient struct {
 
 // NewAnthropicClient creates a new Anthropic API client.
 func NewAnthropicClient(apiKey string) *AnthropicClient {
+	return NewAnthropicClientWithBaseURL(apiKey, "https://api.anthropic.com/v1")
+}
+
+// NewAnthropicClientWithBaseURL creates a new Anthropic-compatible API client.
+func NewAnthropicClientWithBaseURL(apiKey, baseURL string) *AnthropicClient {
+	base := strings.TrimSpace(baseURL)
+	if base == "" {
+		base = "https://api.anthropic.com/v1"
+	}
+	base = strings.TrimRight(base, "/")
 	return &AnthropicClient{
 		APIKey:  apiKey,
-		BaseURL: "https://api.anthropic.com/v1",
+		BaseURL: base,
 		client: &http.Client{
 			Timeout: 120 * time.Second,
 		},
@@ -111,7 +122,7 @@ func (c *AnthropicClient) Chat(ctx context.Context, req *ChatRequest) (*ChatResp
 
 	// Default max_tokens if not set.
 	if req.MaxTokens == 0 {
-		req.MaxTokens = 8192
+		req.MaxTokens = 4096
 	}
 
 	reqBody, err := json.Marshal(req)
@@ -125,7 +136,11 @@ func (c *AnthropicClient) Chat(ctx context.Context, req *ChatRequest) (*ChatResp
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", c.APIKey)
+	if isAnthropicSetupToken(c.APIKey) {
+		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	} else {
+		httpReq.Header.Set("x-api-key", c.APIKey)
+	}
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 
 	resp, err := c.client.Do(httpReq)
@@ -140,7 +155,7 @@ func (c *AnthropicClient) Chat(ctx context.Context, req *ChatRequest) (*ChatResp
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, newAPIError(resp.StatusCode, string(body))
 	}
 
 	var chatResp ChatResponse
@@ -149,6 +164,10 @@ func (c *AnthropicClient) Chat(ctx context.Context, req *ChatRequest) (*ChatResp
 	}
 
 	return &chatResp, nil
+}
+
+func isAnthropicSetupToken(token string) bool {
+	return strings.HasPrefix(strings.TrimSpace(token), "sk-ant-oat01-")
 }
 
 // applyExtendedThinking applies extended thinking mode to the model name.
