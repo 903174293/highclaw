@@ -1,14 +1,14 @@
-// Package tui implements the terminal user interface.
+// Package tui 提供主题定义
 package tui
 
 import "github.com/charmbracelet/lipgloss"
 
-// Theme 定义 TUI 的颜色主题
+// Theme 定义 TUI 颜色主题
 type Theme struct {
 	background   lipgloss.Color
 	text         lipgloss.Color
 	textMuted    lipgloss.Color
-	primary      lipgloss.Color
+	primary      lipgloss.Color // 主色调 (绿色)
 	success      lipgloss.Color
 	warning      lipgloss.Color
 	error        lipgloss.Color
@@ -16,7 +16,7 @@ type Theme struct {
 	borderActive lipgloss.Color
 }
 
-// 默认主题（暗色，类似 OpenCode）
+// getTheme 获取当前主题
 func getTheme() Theme {
 	return Theme{
 		background:   lipgloss.Color("#1a1a1a"),

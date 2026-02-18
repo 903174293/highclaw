@@ -1,46 +1,64 @@
-// Package tui implements the terminal user interface.
+// Package tui 提供 logo 渲染
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // HighClaw Logo 像素字（仿 OpenCode 风格）
-// 使用 _ ^ ~ 作为阴影标记
-var logoLeft = []string{
-	"                          ",
-	"█▀▀█ ▀ █▀▀▀ █▀▀█ █▀▀▀ █   ",
-	"█__█ █ █___ █__█ █___ █__ ",
-	"▀▀▀▀ ▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀ ",
+var logoLines = []string{
+	"⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡",
+	"██╗  ██╗██╗ ██████╗ ██╗  ██╗ ██████╗██╗      █████╗ ██╗    ██╗",
+	"██║  ██║██║██╔════╝ ██║  ██║██╔════╝██║     ██╔══██╗██║    ██║",
+	"███████║██║██║  ███╗███████║██║     ██║     ███████║██║ █╗ ██║",
+	"██╔══██║██║██║   ██║██╔══██║██║     ██║     ██╔══██║██║███╗██║",
+	"██║  ██║██║╚██████╔╝██║  ██║╚██████╗███████╗██║  ██║╚███╔███╔╝",
+	"╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝",
+	"⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡",
 }
 
-var logoRight = []string{
-	"                    ",
-	" █▀▀█ █   █▀▀█ █   █",
-	" █___ █__ █__█ █ █ █",
-	" ▀▀▀▀ ▀▀▀ ▀▀▀▀ ▀▀▀▀▀",
-}
+var tagline = "High performance. Built for speed and reliability. 100% Go 100% Agnostic."
 
-// 渲染 Logo
-func renderLogo(width int) string {
+// renderLogo 渲染 Logo
+func renderLogo(termWidth int) string {
 	theme := getTheme()
-	var result string
 
-	for i := range logoLeft {
-		left := lipgloss.NewStyle().Foreground(theme.textMuted).Render(logoLeft[i])
-		right := lipgloss.NewStyle().Foreground(theme.text).Bold(true).Render(logoRight[i])
-		line := left + " " + right
-		// 居中
-		padding := (width - lipgloss.Width(line)) / 2
-		if padding > 0 {
-			line = lipgloss.NewStyle().PaddingLeft(padding).Render(line)
+	// 计算 logo 宽度
+	maxWidth := 0
+	for _, line := range logoLines {
+		w := lipgloss.Width(line)
+		if w > maxWidth {
+			maxWidth = w
 		}
-		result += line + "\n"
 	}
-	return result
+
+	var b strings.Builder
+
+	// Logo 行，居中
+	for _, line := range logoLines {
+		styledLine := lipgloss.NewStyle().Foreground(theme.primary).Bold(true).Render(line)
+		padding := (termWidth - lipgloss.Width(line)) / 2
+		if padding < 0 {
+			padding = 0
+		}
+		b.WriteString(strings.Repeat(" ", padding) + styledLine + "\n")
+	}
+
+	// Tagline
+	styledTagline := lipgloss.NewStyle().Foreground(theme.textMuted).Italic(true).Render(tagline)
+	taglinePadding := (termWidth - lipgloss.Width(tagline)) / 2
+	if taglinePadding < 0 {
+		taglinePadding = 0
+	}
+	b.WriteString(strings.Repeat(" ", taglinePadding) + styledTagline)
+
+	return b.String()
 }
 
-// 小型 Logo（用于 header）
+// renderMiniLogo 渲染简化 logo
 func renderMiniLogo() string {
 	theme := getTheme()
-	return lipgloss.NewStyle().Foreground(theme.textMuted).Render("high") +
-		lipgloss.NewStyle().Foreground(theme.text).Bold(true).Render("claw")
+	return lipgloss.NewStyle().Foreground(theme.primary).Bold(true).Render("⚡ HighClaw")
 }

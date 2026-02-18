@@ -1,16 +1,17 @@
-// Package tui implements command system for TUI.
+// Package tui 提供命令处理
 package tui
 
 import (
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 	"sort"
 	"strings"
+
+	"github.com/highclaw/highclaw/internal/gateway/session"
 )
 
-// Command represents a TUI slash command
+// Command 定义斜杠命令
 type Command struct {
 	Name        string
 	Aliases     []string
@@ -19,144 +20,202 @@ type Command struct {
 	Handler     func(m *Model, args []string) (string, error)
 }
 
-// getBuiltinCommands returns the list of all built-in commands
+// getBuiltinCommands 返回内置命令列表
 func getBuiltinCommands() []Command {
 	return []Command{
-		// Session commands
-		{Name: "sessions", Aliases: []string{"session", "s"}, Description: "List all sessions", Category: "Session", Handler: cmdListSessions},
-		{Name: "switch", Aliases: []string{"sw"}, Description: "Switch to a session", Category: "Session", Handler: cmdSwitchSession},
-		{Name: "new", Aliases: []string{"n"}, Description: "Create new session", Category: "Session", Handler: cmdNewSession},
-		{Name: "delete", Aliases: []string{"del", "rm"}, Description: "Delete a session", Category: "Session", Handler: cmdDeleteSession},
-		{Name: "rename", Aliases: []string{"ren"}, Description: "Rename current session", Category: "Session", Handler: cmdRenameSession},
+		// Session 命令
+		{Name: "sessions", Aliases: []string{"s"}, Description: "List all sessions", Category: "Session", Handler: cmdListSessions},
+		{Name: "switch", Aliases: []string{"sw"}, Description: "Switch to another session", Category: "Session", Handler: cmdSwitchSession},
+		{Name: "new", Aliases: []string{"n"}, Description: "Start a new session", Category: "Session", Handler: cmdNewSession},
+		{Name: "delete", Aliases: []string{"rm"}, Description: "Delete a session", Category: "Session", Handler: cmdDeleteSession},
+		{Name: "rename", Aliases: nil, Description: "Rename current session", Category: "Session", Handler: cmdRenameSession},
+		{Name: "compact", Aliases: nil, Description: "Compact session history", Category: "Session", Handler: cmdCompact},
 
-		// Model commands
-		{Name: "model", Aliases: []string{"m"}, Description: "Switch model", Category: "Model", Handler: cmdSwitchModel},
-		{Name: "models", Aliases: []string{"ml"}, Description: "List models", Category: "Model", Handler: cmdListModels},
+		// Model 命令
+		{Name: "model", Aliases: []string{"m"}, Description: "Switch model", Category: "Model", Handler: cmdSetModel},
+		{Name: "models", Aliases: nil, Description: "List available models", Category: "Model", Handler: cmdListModels},
 
-		// System commands
-		{Name: "clear", Aliases: []string{"cls", "c"}, Description: "Clear chat", Category: "System", Handler: cmdClearChat},
-		{Name: "reload", Aliases: []string{"r"}, Description: "Reload sessions", Category: "System", Handler: cmdReload},
+		// 系统命令
+		{Name: "clear", Aliases: []string{"c"}, Description: "Clear chat display", Category: "System", Handler: cmdClear},
+		{Name: "reload", Aliases: nil, Description: "Reload configuration", Category: "System", Handler: cmdReload},
 		{Name: "help", Aliases: []string{"h", "?"}, Description: "Show help", Category: "System", Handler: cmdHelp},
-		{Name: "quit", Aliases: []string{"q", "exit"}, Description: "Quit TUI", Category: "System", Handler: cmdQuit},
+		{Name: "quit", Aliases: []string{"q", "exit"}, Description: "Exit TUI", Category: "System", Handler: cmdQuit},
 
-		// Shell commands
+		// Shell 命令
 		{Name: "sh", Aliases: []string{"shell", "!"}, Description: "Run shell command", Category: "Shell", Handler: cmdShell},
 		{Name: "cd", Aliases: nil, Description: "Change directory", Category: "Shell", Handler: cmdCd},
-		{Name: "pwd", Aliases: nil, Description: "Print working dir", Category: "Shell", Handler: cmdPwd},
+		{Name: "pwd", Aliases: nil, Description: "Print working directory", Category: "Shell", Handler: cmdPwd},
 
-		// Info commands
-		{Name: "tokens", Aliases: []string{"token", "t"}, Description: "Show token usage", Category: "Info", Handler: cmdTokens},
-		{Name: "info", Aliases: []string{"i"}, Description: "Show session info", Category: "Info", Handler: cmdInfo},
-		{Name: "copy", Aliases: []string{"cp"}, Description: "Copy last response", Category: "Info", Handler: cmdCopy},
+		// 信息命令
+		{Name: "tokens", Aliases: []string{"t"}, Description: "Show token usage", Category: "Info", Handler: cmdTokens},
+		{Name: "info", Aliases: nil, Description: "Show session info", Category: "Info", Handler: cmdInfo},
 	}
 }
 
+// parseCommand 解析命令和参数
+func parseCommand(text string) (string, []string) {
+	text = strings.TrimPrefix(strings.TrimSpace(text), "/")
+	parts := strings.Fields(text)
+	if len(parts) == 0 {
+		return "", nil
+	}
+	return strings.ToLower(parts[0]), parts[1:]
+}
+
+// findCommand 查找命令
 func findCommand(name string) *Command {
-	name = strings.ToLower(strings.TrimSpace(name))
-	cmds := getBuiltinCommands()
-	for i := range cmds {
-		if cmds[i].Name == name {
-			return &cmds[i]
+	name = strings.ToLower(name)
+	for _, cmd := range getBuiltinCommands() {
+		if cmd.Name == name {
+			return &cmd
 		}
-		for _, alias := range cmds[i].Aliases {
+		for _, alias := range cmd.Aliases {
 			if alias == name {
-				return &cmds[i]
+				return &cmd
 			}
 		}
 	}
 	return nil
 }
 
-func parseCommand(input string) (name string, args []string) {
-	input = strings.TrimSpace(input)
-	if !strings.HasPrefix(input, "/") {
-		return "", nil
-	}
-	input = strings.TrimPrefix(input, "/")
-	parts := strings.Fields(input)
-	if len(parts) == 0 {
-		return "", nil
-	}
-	return parts[0], parts[1:]
-}
+// Command handlers
 
 func cmdListSessions(m *Model, args []string) (string, error) {
 	if len(m.sessions) == 0 {
-		return "No sessions found.", nil
+		return "No sessions found", nil
 	}
 	var b strings.Builder
 	b.WriteString("Sessions:\n")
 	for i, s := range m.sessions {
-		cur := " "
+		marker := "  "
 		if s.Key == m.currentSession {
-			cur = "*"
+			marker = "→ "
 		}
-		b.WriteString(fmt.Sprintf(" %s [%d] %s (%s)\n", cur, i, s.Key, relativeTime(s.UpdatedAt)))
+		label := lastSegment(s.Key)
+		updated := relativeTime(s.UpdatedAt)
+		b.WriteString(fmt.Sprintf("%s%d. %s (%s)\n", marker, i+1, label, updated))
 	}
-	return b.String(), nil
+	return strings.TrimSuffix(b.String(), "\n"), nil
 }
 
 func cmdSwitchSession(m *Model, args []string) (string, error) {
 	if len(args) == 0 {
-		return "Usage: /switch <name-or-index>", nil
+		return "", fmt.Errorf("usage: /switch <session-name or number>")
 	}
-	target := strings.Join(args, " ")
+	target := strings.TrimSpace(args[0])
+
+	// 尝试数字索引
 	var idx int
-	if _, err := fmt.Sscanf(target, "%d", &idx); err == nil && idx >= 0 && idx < len(m.sessions) {
-		m.currentSession = m.sessions[idx].Key
+	if n, _ := fmt.Sscanf(target, "%d", &idx); n == 1 && idx > 0 && idx <= len(m.sessions) {
+		m.currentSession = m.sessions[idx-1].Key
+		_ = session.SetCurrent(m.currentSession)
 		m.loadCurrentSession()
-		return fmt.Sprintf("Switched to: %s", m.currentSession), nil
+		return fmt.Sprintf("Switched to: %s", lastSegment(m.currentSession)), nil
 	}
+
+	// 尝试名称匹配
 	for _, s := range m.sessions {
 		if strings.Contains(strings.ToLower(s.Key), strings.ToLower(target)) {
 			m.currentSession = s.Key
+			_ = session.SetCurrent(m.currentSession)
 			m.loadCurrentSession()
-			return fmt.Sprintf("Switched to: %s", m.currentSession), nil
+			return fmt.Sprintf("Switched to: %s", lastSegment(m.currentSession)), nil
 		}
 	}
-	return fmt.Sprintf("Session not found: %s", target), nil
+
+	return "", fmt.Errorf("session not found: %s", target)
 }
 
 func cmdNewSession(m *Model, args []string) (string, error) {
 	m.startNewSession()
-	return fmt.Sprintf("Created: %s", m.currentSession), nil
+	return fmt.Sprintf("New session: %s", lastSegment(m.currentSession)), nil
 }
 
 func cmdDeleteSession(m *Model, args []string) (string, error) {
-	return "Delete not implemented yet.", nil
+	if len(args) == 0 {
+		return "", fmt.Errorf("usage: /delete <session-name or number>")
+	}
+	target := strings.TrimSpace(args[0])
+
+	var keyToDelete string
+	var idx int
+	if n, _ := fmt.Sscanf(target, "%d", &idx); n == 1 && idx > 0 && idx <= len(m.sessions) {
+		keyToDelete = m.sessions[idx-1].Key
+	} else {
+		for _, s := range m.sessions {
+			if strings.Contains(strings.ToLower(s.Key), strings.ToLower(target)) {
+				keyToDelete = s.Key
+				break
+			}
+		}
+	}
+
+	if keyToDelete == "" {
+		return "", fmt.Errorf("session not found: %s", target)
+	}
+
+	if keyToDelete == m.currentSession {
+		return "", fmt.Errorf("cannot delete current session")
+	}
+
+	if err := session.Delete(keyToDelete); err != nil {
+		return "", err
+	}
+
+	// 刷新列表
+	newSessions := make([]sessionEntry, 0, len(m.sessions)-1)
+	for _, s := range m.sessions {
+		if s.Key != keyToDelete {
+			newSessions = append(newSessions, s)
+		}
+	}
+	m.sessions = newSessions
+
+	return fmt.Sprintf("Deleted: %s", lastSegment(keyToDelete)), nil
 }
 
 func cmdRenameSession(m *Model, args []string) (string, error) {
-	return "Rename not implemented yet.", nil
+	return "", fmt.Errorf("rename not implemented yet")
 }
 
-func cmdSwitchModel(m *Model, args []string) (string, error) {
+func cmdCompact(m *Model, args []string) (string, error) {
+	return "Compact not implemented yet. Use /new to start fresh.", nil
+}
+
+func cmdSetModel(m *Model, args []string) (string, error) {
 	if len(args) == 0 {
-		return fmt.Sprintf("Current: %s\nUsage: /model <name>", m.cfg.Agent.Model), nil
+		return fmt.Sprintf("Current model: %s", m.cfg.Agent.Model), nil
 	}
-	m.cfg.Agent.Model = strings.Join(args, " ")
-	return fmt.Sprintf("Model: %s", m.cfg.Agent.Model), nil
+	newModel := strings.TrimSpace(args[0])
+	m.cfg.Agent.Model = newModel
+	return fmt.Sprintf("Model set to: %s", newModel), nil
 }
 
 func cmdListModels(m *Model, args []string) (string, error) {
-	models := []string{"gpt-4o", "gpt-4o-mini", "claude-3-5-sonnet-20241022", "glm-4-flash", "deepseek-chat"}
-	var b strings.Builder
-	b.WriteString("Models:\n")
-	for _, model := range models {
-		cur := " "
-		if model == m.cfg.Agent.Model {
-			cur = "*"
-		}
-		b.WriteString(fmt.Sprintf(" %s %s\n", cur, model))
+	models := []string{
+		"claude-sonnet-4-20250514",
+		"claude-3-5-sonnet-20241022",
+		"gpt-4o",
+		"gpt-4o-mini",
+		"deepseek-chat",
+		"deepseek-reasoner",
 	}
-	return b.String(), nil
+	var b strings.Builder
+	b.WriteString("Available models:\n")
+	for _, model := range models {
+		marker := "  "
+		if model == m.cfg.Agent.Model {
+			marker = "→ "
+		}
+		b.WriteString(marker + model + "\n")
+	}
+	return strings.TrimSuffix(b.String(), "\n"), nil
 }
 
-func cmdClearChat(m *Model, args []string) (string, error) {
+func cmdClear(m *Model, args []string) (string, error) {
 	m.lines = nil
-	m.history = nil
 	m.updateViewport()
-	return "Chat cleared.", nil
+	return "", nil
 }
 
 func cmdReload(m *Model, args []string) (string, error) {
@@ -164,31 +223,31 @@ func cmdReload(m *Model, args []string) (string, error) {
 }
 
 func cmdHelp(m *Model, args []string) (string, error) {
-	cmds := getBuiltinCommands()
-	cats := make(map[string][]Command)
-	for _, cmd := range cmds {
-		cats[cmd.Category] = append(cats[cmd.Category], cmd)
+	commands := getBuiltinCommands()
+	byCategory := make(map[string][]Command)
+	for _, cmd := range commands {
+		byCategory[cmd.Category] = append(byCategory[cmd.Category], cmd)
 	}
+
+	var categories []string
+	for cat := range byCategory {
+		categories = append(categories, cat)
+	}
+	sort.Strings(categories)
+
 	var b strings.Builder
-	b.WriteString("Commands:\n\n")
-	keys := make([]string, 0, len(cats))
-	for k := range cats {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, cat := range keys {
-		cmdList := cats[cat]
-		b.WriteString(fmt.Sprintf("[%s]\n", cat))
-		for _, cmd := range cmdList {
-			als := ""
+	b.WriteString("Commands:\n")
+	for _, cat := range categories {
+		b.WriteString(fmt.Sprintf("\n[%s]\n", cat))
+		for _, cmd := range byCategory[cat] {
+			aliases := ""
 			if len(cmd.Aliases) > 0 {
-				als = fmt.Sprintf(" (/%s)", strings.Join(cmd.Aliases, ", /"))
+				aliases = " (" + strings.Join(cmd.Aliases, ", ") + ")"
 			}
-			b.WriteString(fmt.Sprintf("  /%s%s - %s\n", cmd.Name, als, cmd.Description))
+			b.WriteString(fmt.Sprintf("  /%s%s - %s\n", cmd.Name, aliases, cmd.Description))
 		}
-		b.WriteString("\n")
 	}
-	return b.String(), nil
+	return strings.TrimSuffix(b.String(), "\n"), nil
 }
 
 func cmdQuit(m *Model, args []string) (string, error) {
@@ -197,68 +256,58 @@ func cmdQuit(m *Model, args []string) (string, error) {
 
 func cmdShell(m *Model, args []string) (string, error) {
 	if len(args) == 0 {
-		return "Usage: /sh <command>", nil
+		return "", fmt.Errorf("usage: /sh <command>")
 	}
 	cmdStr := strings.Join(args, " ")
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/c", cmdStr)
-	} else {
-		cmd = exec.Command("sh", "-c", cmdStr)
-	}
+	cmd := exec.Command("sh", "-c", cmdStr)
 	output, err := cmd.CombinedOutput()
+	result := strings.TrimSpace(string(output))
 	if err != nil {
-		return fmt.Sprintf("$ %s\nError: %v\n%s", cmdStr, err, string(output)), nil
+		return fmt.Sprintf("$ %s\n%s\nError: %v", cmdStr, result, err), nil
 	}
-	return fmt.Sprintf("$ %s\n%s", cmdStr, string(output)), nil
+	return fmt.Sprintf("$ %s\n%s", cmdStr, result), nil
 }
 
 func cmdCd(m *Model, args []string) (string, error) {
 	if len(args) == 0 {
-		return "Usage: /cd <dir>", nil
+		home, _ := os.UserHomeDir()
+		if home != "" {
+			if err := os.Chdir(home); err != nil {
+				return "", err
+			}
+			return home, nil
+		}
+		return "", fmt.Errorf("no HOME directory")
 	}
-	dir := strings.Join(args, " ")
-	if err := os.Chdir(dir); err != nil {
-		return fmt.Sprintf("Error: %v", err), nil
+	target := strings.TrimSpace(args[0])
+	if err := os.Chdir(target); err != nil {
+		return "", err
 	}
 	pwd, _ := os.Getwd()
-	return fmt.Sprintf("Changed to: %s", pwd), nil
+	return pwd, nil
 }
 
 func cmdPwd(m *Model, args []string) (string, error) {
 	pwd, err := os.Getwd()
 	if err != nil {
-		return fmt.Sprintf("Error: %v", err), nil
+		return "", err
 	}
 	return pwd, nil
 }
 
 func cmdTokens(m *Model, args []string) (string, error) {
-	return fmt.Sprintf("Tokens:\n  Input:  %d\n  Output: %d\n  Total:  %d",
+	return fmt.Sprintf("Input: %d, Output: %d, Total: %d",
 		m.tokenUsage.input, m.tokenUsage.output, m.tokenUsage.input+m.tokenUsage.output), nil
 }
 
 func cmdInfo(m *Model, args []string) (string, error) {
-	status := "Offline"
-	if true {
-		status = "Online"
-	}
-	return fmt.Sprintf("Info:\n  Session: %s\n  Model:   %s\n  Agent:   %s\n  Msgs:    %d\n  Status:  %s",
-		m.currentSession, m.cfg.Agent.Model, m.opts.Agent, len(m.history), status), nil
-}
-
-func cmdCopy(m *Model, args []string) (string, error) {
-	for i := len(m.lines) - 1; i >= 0; i-- {
-		if m.lines[i].Role == "assistant" {
-			return fmt.Sprintf("Copied: %s...", truncStr(m.lines[i].Content, 50)), nil
-		}
-	}
-	return "No assistant message to copy.", nil
-}
-
-func truncStr(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
+	pwd, _ := os.Getwd()
+	var b strings.Builder
+	b.WriteString("Session Info:\n")
+	b.WriteString(fmt.Sprintf("  Session: %s\n", m.currentSession))
+	b.WriteString(fmt.Sprintf("  Model: %s\n", m.cfg.Agent.Model))
+	b.WriteString(fmt.Sprintf("  Messages: %d\n", len(m.history)))
+	b.WriteString(fmt.Sprintf("  Tokens: %d (in) / %d (out)\n", m.tokenUsage.input, m.tokenUsage.output))
+	b.WriteString(fmt.Sprintf("  CWD: %s", pwd))
+	return b.String(), nil
 }
