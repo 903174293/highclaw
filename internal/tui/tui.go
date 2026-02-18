@@ -138,6 +138,11 @@ func NewModel(opts Options) Model {
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("45"))
 
 	initialSession := buildSessionKey(opts.Agent, opts.Session)
+	if strings.TrimSpace(opts.Session) == "" || strings.EqualFold(strings.TrimSpace(opts.Session), "main") {
+		if current, err := session.Current(); err == nil && strings.TrimSpace(current) != "" {
+			initialSession = strings.TrimSpace(current)
+		}
+	}
 	model := Model{
 		opts:            opts,
 		cfg:             cfg,
@@ -325,17 +330,22 @@ func (m Model) View() string {
 }
 
 func (m *Model) renderHeader() string {
+	logo := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("45")).
+		Render("🦀")
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("159")).
-		Background(lipgloss.Color("57")).
 		Padding(0, 1).
-		Render(" HighClaw TUI ")
+		Render("HIGHCLAW TUI")
 	info := lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Render(
 		fmt.Sprintf("agent %s | session %s | model %s", m.opts.Agent, lastSegment(m.currentSession), m.cfg.Agent.Model),
 	)
+	bar := lipgloss.NewStyle().Foreground(lipgloss.Color("239")).Render(strings.Repeat("─", max(10, m.width-2)))
+	head := lipgloss.JoinHorizontal(lipgloss.Top, logo, " ", title, "  ", info)
 	return lipgloss.NewStyle().Padding(0, 1).Width(m.width).
-		Render(lipgloss.JoinHorizontal(lipgloss.Top, title, " ", info))
+		Render(lipgloss.JoinVertical(lipgloss.Left, head, bar))
 }
 
 func (m *Model) renderBody() string {
@@ -346,19 +356,20 @@ func (m *Model) renderBody() string {
 	sidebarStyle := lipgloss.NewStyle().
 		Width(sidebarWidth).
 		Height(bodyHeight).
-		Border(lipgloss.RoundedBorder()).
+		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("62")).
 		Padding(0, 1)
 
 	mainStyle := lipgloss.NewStyle().
 		Width(mainWidth).
 		Height(bodyHeight).
-		Border(lipgloss.RoundedBorder()).
+		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("238"))
 
 	sidebar := sidebarStyle.Render(m.renderSessions())
 	main := mainStyle.Render(m.viewport.View())
-	return lipgloss.JoinHorizontal(lipgloss.Top, sidebar, " ", main)
+	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(strings.Repeat("│\n", bodyHeight+2))
+	return lipgloss.JoinHorizontal(lipgloss.Top, sidebar, divider, main)
 }
 
 func (m *Model) renderSessions() string {
@@ -429,7 +440,7 @@ func (m *Model) renderInput() string {
 		label = "Thinking " + m.spinner.View()
 	}
 	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("99")).
 		Padding(0, 1).
 		Width(max(20, m.width-2))
@@ -464,10 +475,11 @@ func (m *Model) renderStatus() string {
 	kb := "Tab switch focus • ↑↓ sessions • Enter send/select • type to filter • Ctrl+N new • Ctrl+R reload • Ctrl+C quit"
 	line1 := fmt.Sprintf("connected | %s | %s", network, m.currentSession)
 	line2 := fmt.Sprintf("agent %s | model %s%s%s%s", m.opts.Agent, m.cfg.Agent.Model, tokenInfo, rtt, errText)
+	sep := strings.Repeat("─", max(10, m.width-2))
 	return lipgloss.NewStyle().
 		Padding(0, 1).
 		Foreground(lipgloss.Color("246")).
-		Render(line1 + "\n" + line2 + "\n" + kb)
+		Render(sep + "\n" + line1 + "\n" + line2 + "\n" + kb)
 }
 
 func (m *Model) resize() {
@@ -517,6 +529,7 @@ func (m *Model) startNewSession() {
 	m.lines = nil
 	newKey := buildSessionKey(m.opts.Agent, fmt.Sprintf("session-%d", time.Now().Unix()%100000))
 	m.currentSession = newKey
+	_ = session.SetCurrent(newKey)
 	m.sessionFilter = ""
 	m.selectedSession = 0
 	m.appendLine("system", "Started new session: "+newKey)
@@ -546,6 +559,7 @@ func (m *Model) activateSelectedSession() {
 	}
 	s := visible[m.selectedSession]
 	m.currentSession = s.Key
+	_ = session.SetCurrent(s.Key)
 	m.loadCurrentSession()
 	m.updateViewport()
 }
@@ -583,39 +597,27 @@ func (m *Model) loadCurrentSession() {
 }
 
 func (m *Model) persistCurrentSession() {
-	now := time.Now()
-	createdAt := now
-	if old, err := session.Load(m.currentSession); err == nil && !old.CreatedAt.IsZero() {
-		createdAt = old.CreatedAt
-	}
-	sess := &session.Session{
-		Key:            m.currentSession,
-		Channel:        "tui",
-		AgentID:        m.opts.Agent,
-		Model:          m.cfg.Agent.Model,
-		CreatedAt:      createdAt,
-		LastActivityAt: now,
-	}
+	history := make([]protocol.ChatMessage, 0, len(m.history))
 	for _, h := range m.history {
 		role := strings.TrimSpace(h.Role)
 		content := strings.TrimSpace(h.Content)
 		if role == "" || content == "" {
 			continue
 		}
-		sess.AddMessage(protocol.ChatMessage{
+		history = append(history, protocol.ChatMessage{
 			Role:      role,
 			Content:   content,
 			Channel:   "tui",
 			Timestamp: time.Now().UnixMilli(),
 		})
 	}
-	_ = sess.Save()
+	_ = session.SaveFromHistory(m.currentSession, "tui", m.opts.Agent, m.cfg.Agent.Model, history)
 	m.upsertSessionEntry(sessionEntry{
-		Key:       sess.Key,
-		Label:     sess.Key,
-		Channel:   sess.Channel,
-		UpdatedAt: sess.LastActivityAt,
-		Model:     sess.Model,
+		Key:       m.currentSession,
+		Label:     m.currentSession,
+		Channel:   "tui",
+		UpdatedAt: time.Now(),
+		Model:     m.cfg.Agent.Model,
 	})
 }
 

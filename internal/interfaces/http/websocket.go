@@ -13,6 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/highclaw/highclaw/internal/agent"
 	"github.com/highclaw/highclaw/internal/gateway/protocol"
+	"github.com/highclaw/highclaw/internal/gateway/session"
 )
 
 // WSClient represents a WebSocket client.
@@ -205,13 +206,18 @@ func (c *WSClient) handleChatSend(msg WSMessage) {
 		return
 	}
 
-	sessionKey := params.Session
-	if sessionKey == "" {
-		sessionKey = "main"
-	}
 	channel := params.Channel
 	if channel == "" {
 		channel = "websocket"
+	}
+	sessionKey := params.Session
+	if sessionKey == "" {
+		resolved, err := session.ResolveSession(channel, c.id)
+		if err == nil && strings.TrimSpace(resolved) != "" {
+			sessionKey = resolved
+		} else {
+			sessionKey = session.DefaultExternalSessionKey
+		}
 	}
 
 	// Store user message in session
@@ -236,6 +242,8 @@ func (c *WSClient) handleChatSend(msg WSMessage) {
 	result, err := c.server.agent.Run(context.Background(), &agent.RunRequest{
 		SessionKey: sessionKey,
 		Channel:    channel,
+		Sender:     c.id,
+		MessageID:  msg.ID,
 		Message:    params.Message,
 	})
 	if err != nil {

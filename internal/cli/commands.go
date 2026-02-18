@@ -37,6 +37,7 @@ var (
 	agentProvider    string
 	agentModel       string
 	agentTemperature float64
+	agentSession     string
 
 	cronTaskID      string
 	cronTaskSpec    string
@@ -57,6 +58,9 @@ var (
 	tuiAgent   string
 	tuiSession string
 	tuiModel   string
+
+	memoryLimit    int
+	memoryCategory string
 )
 
 // --- Agent Command ---
@@ -69,7 +73,11 @@ var agentCmd = &cobra.Command{
 		if strings.TrimSpace(agentMessage) != "" {
 			return agentChatCmd.RunE(cmd, []string{agentMessage})
 		}
-		return tui.Run()
+		return tui.RunWithOptions(tui.Options{
+			Agent:   "main",
+			Session: strings.TrimSpace(agentSession),
+			Model:   strings.TrimSpace(agentModel),
+		})
 	},
 }
 
@@ -93,7 +101,12 @@ var agentChatCmd = &cobra.Command{
 			return fmt.Errorf("message cannot be empty")
 		}
 
-		sessionKey := fmt.Sprintf("agent:%s:%s", "main", fmt.Sprintf("cli-%d", time.Now().UnixNano()))
+		sessionKey := strings.TrimSpace(agentSession)
+		if sessionKey == "" {
+			sessionKey = fmt.Sprintf("agent:%s:%s", "main", fmt.Sprintf("cli-%d", time.Now().UnixNano()))
+		} else if !strings.HasPrefix(sessionKey, "agent:") {
+			sessionKey = fmt.Sprintf("agent:%s:%s", "main", sessionKey)
+		}
 		result, err := runner.Run(context.Background(), &agent.RunRequest{
 			SessionKey:  sessionKey,
 			Channel:     "cli",
@@ -105,7 +118,11 @@ var agentChatCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		_ = saveCLISession(sessionKey, cfg.Agent.Model, msg, result.Reply)
+		modelName := strings.TrimSpace(agentModel)
+		if modelName == "" {
+			modelName = cfg.Agent.Model
+		}
+		_ = saveCLISession(sessionKey, modelName, msg, result.Reply)
 
 		fmt.Println(result.Reply)
 		return nil
@@ -440,12 +457,33 @@ var sessionsGetCmd = &cobra.Command{
 	Short: "Get session details",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		s, err := session.Load(args[0])
+		key, err := resolveSessionKey(args[0])
 		if err != nil {
-			return fmt.Errorf("load session %q: %w", args[0], err)
+			return err
+		}
+		s, err := session.Load(key)
+		if err != nil {
+			return fmt.Errorf("load session %q: %w", key, err)
 		}
 		data, _ := json.MarshalIndent(s, "", "  ")
 		fmt.Println(string(data))
+		return nil
+	},
+}
+
+var sessionsCurrentCmd = &cobra.Command{
+	Use:   "current",
+	Short: "Show current active session",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		key, err := session.Current()
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(key) == "" {
+			fmt.Println("current session: (none)")
+			return nil
+		}
+		fmt.Printf("current session: %s\n", key)
 		return nil
 	},
 }
@@ -455,10 +493,37 @@ var sessionsDeleteCmd = &cobra.Command{
 	Short: "Delete a session",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := session.Delete(args[0]); err != nil {
+		key, err := resolveSessionKey(args[0])
+		if err != nil {
 			return err
 		}
-		fmt.Printf("deleted session: %s\n", args[0])
+		if err := session.Delete(key); err != nil {
+			return err
+		}
+		if current, _ := session.Current(); strings.TrimSpace(current) == strings.TrimSpace(key) {
+			_ = session.SetCurrent("")
+		}
+		fmt.Printf("deleted session: %s\n", key)
+		return nil
+	},
+}
+
+var sessionsSwitchCmd = &cobra.Command{
+	Use:   "switch [key]",
+	Short: "Switch current active session",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		key, err := resolveSessionKey(args[0])
+		if err != nil {
+			return err
+		}
+		if _, err := session.Load(key); err != nil {
+			return fmt.Errorf("load session %q: %w", key, err)
+		}
+		if err := session.SetCurrent(key); err != nil {
+			return fmt.Errorf("set current session: %w", err)
+		}
+		fmt.Printf("current session: %s\n", key)
 		return nil
 	},
 }
@@ -468,15 +533,64 @@ var sessionsResetCmd = &cobra.Command{
 	Short: "Reset a session's message history",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		s, err := session.Load(args[0])
+		key, err := resolveSessionKey(args[0])
 		if err != nil {
-			return fmt.Errorf("load session %q: %w", args[0], err)
+			return err
+		}
+		s, err := session.Load(key)
+		if err != nil {
+			return fmt.Errorf("load session %q: %w", key, err)
 		}
 		s.Reset()
 		if err := s.Save(); err != nil {
-			return fmt.Errorf("save session %q: %w", args[0], err)
+			return fmt.Errorf("save session %q: %w", key, err)
 		}
-		fmt.Printf("session reset: %s\n", args[0])
+		fmt.Printf("session reset: %s\n", key)
+		return nil
+	},
+}
+
+var sessionsBindingsCmd = &cobra.Command{
+	Use:   "bindings",
+	Short: "List external channel session bindings",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		bindings, err := session.ListBindings()
+		if err != nil {
+			return err
+		}
+		if len(bindings) == 0 {
+			fmt.Printf("no bindings configured (default external session: %s)\n", session.DefaultExternalSessionKey)
+			return nil
+		}
+		for _, b := range bindings {
+			fmt.Printf("channel=%s conversation=%s -> %s\n", b.Channel, b.Conversation, b.SessionKey)
+		}
+		return nil
+	},
+}
+
+var sessionsBindCmd = &cobra.Command{
+	Use:   "bind [channel] [conversation] [sessionKey]",
+	Short: "Bind an external conversation to a session key",
+	Args:  cobra.ExactArgs(3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := session.SetBinding(args[0], args[1], args[2]); err != nil {
+			return err
+		}
+		fmt.Printf("binding set: %s/%s -> %s\n", args[0], args[1], args[2])
+		return nil
+	},
+}
+
+var sessionsUnbindCmd = &cobra.Command{
+	Use:   "unbind [channel] [conversation]",
+	Short: "Remove an external conversation binding",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := session.RemoveBinding(args[0], args[1]); err != nil {
+			return err
+		}
+		fmt.Printf("binding removed: %s/%s\n", args[0], args[1])
 		return nil
 	},
 }
@@ -1175,7 +1289,7 @@ var browserInspectCmd = &cobra.Command{
 
 var memoryCmd = &cobra.Command{
 	Use:   "memory",
-	Short: "Manage RAG memory (search, sync, reindex)",
+	Short: "Manage memory backend (search/get/list/status)",
 }
 
 var memorySearchCmd = &cobra.Command{
@@ -1183,20 +1297,68 @@ var memorySearchCmd = &cobra.Command{
 	Short: "Search memory for relevant context",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		query := strings.ToLower(strings.Join(args, " "))
-		records, err := loadMemoryIndex()
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+		query := strings.Join(args, " ")
+		entries, err := searchMemoryBackend(cfg, query, memoryLimit, memoryCategory)
 		if err != nil {
 			return err
 		}
-		hits := 0
-		for _, r := range records {
-			hay := strings.ToLower(strings.Join([]string{r.SessionKey, r.Channel, r.Model}, " "))
-			if strings.Contains(hay, query) {
-				hits++
-				fmt.Printf("%s channel=%s model=%s messages=%d\n", r.SessionKey, r.Channel, r.Model, r.MessageCount)
-			}
+		if len(entries) == 0 {
+			fmt.Println("No memories found matching that query.")
+			return nil
 		}
-		fmt.Printf("matches: %d\n", hits)
+		fmt.Printf("Found %d memories:\n", len(entries))
+		for _, e := range entries {
+			fmt.Printf("- [%s] %s: %s\n", e.Category, e.Key, e.Content)
+		}
+		return nil
+	},
+}
+
+var memoryGetCmd = &cobra.Command{
+	Use:   "get [key]",
+	Short: "Get memory entry by key",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+		entry, err := getMemoryByKey(cfg, args[0])
+		if err != nil {
+			return err
+		}
+		if entry == nil {
+			fmt.Println("memory not found")
+			return nil
+		}
+		fmt.Printf("[%s] %s: %s\n", entry.Category, entry.Key, entry.Content)
+		return nil
+	},
+}
+
+var memoryListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List memory entries",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+		entries, err := listMemoryBackend(cfg, memoryCategory, memoryLimit)
+		if err != nil {
+			return err
+		}
+		if len(entries) == 0 {
+			fmt.Println("no memory entries")
+			return nil
+		}
+		for _, e := range entries {
+			fmt.Printf("[%s] %s: %s\n", e.Category, e.Key, e.Content)
+		}
 		return nil
 	},
 }
@@ -1231,12 +1393,25 @@ var memoryStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show memory backend status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		records, err := loadMemoryIndex()
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+		backend := strings.ToLower(strings.TrimSpace(cfg.Memory.Backend))
+		if backend == "" {
+			backend = "sqlite"
+		}
+		if backend == "none" {
+			backend = "markdown"
+		}
+		count, err := countMemoryBackend(cfg)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("memory index: %s\n", memoryIndexPath())
-		fmt.Printf("records: %d\n", len(records))
+		fmt.Printf("backend: %s\n", backend)
+		fmt.Printf("location: %s\n", memoryBackendLocation(cfg))
+		fmt.Printf("entries: %d\n", count)
+		fmt.Printf("health: %v\n", memoryHealthBackend(cfg))
 		return nil
 	},
 }
@@ -1650,8 +1825,13 @@ func init() {
 	// Sessions subcommands
 	sessionsCmd.AddCommand(sessionsListCmd)
 	sessionsCmd.AddCommand(sessionsGetCmd)
+	sessionsCmd.AddCommand(sessionsCurrentCmd)
+	sessionsCmd.AddCommand(sessionsSwitchCmd)
 	sessionsCmd.AddCommand(sessionsDeleteCmd)
 	sessionsCmd.AddCommand(sessionsResetCmd)
+	sessionsCmd.AddCommand(sessionsBindingsCmd)
+	sessionsCmd.AddCommand(sessionsBindCmd)
+	sessionsCmd.AddCommand(sessionsUnbindCmd)
 
 	// Cron subcommands
 	cronCmd.AddCommand(cronListCmd)
@@ -1734,6 +1914,7 @@ func init() {
 	cronCreateCmd.Flags().StringVar(&cronTaskSpec, "spec", "", "Cron schedule expression")
 	cronCreateCmd.Flags().StringVar(&cronTaskCommand, "command", "", "Command to execute")
 	agentCmd.Flags().StringVarP(&agentMessage, "message", "m", "", "Send one message and exit")
+	agentCmd.Flags().StringVarP(&agentSession, "session", "s", "", "Associate message with an existing session key (default creates a new session)")
 	agentCmd.Flags().StringVarP(&agentProvider, "provider", "p", "", "Provider override (e.g. openrouter, anthropic, glm)")
 	agentCmd.Flags().StringVar(&agentModel, "model", "", "Model override (e.g. anthropic/claude-sonnet-4)")
 	agentCmd.Flags().Float64VarP(&agentTemperature, "temperature", "t", 0.7, "Sampling temperature (0.0 - 2.0)")
@@ -2324,29 +2505,34 @@ func writeJSONFile(path string, v any) error {
 }
 
 func saveCLISession(sessionKey, modelName, userMessage, assistantReply string) error {
-	now := time.Now()
-	sess := &session.Session{
-		Key:            sessionKey,
-		Channel:        "cli",
-		AgentID:        "main",
-		Model:          modelName,
-		MessageCount:   0,
-		CreatedAt:      now,
-		LastActivityAt: now,
-	}
-	sess.AddMessage(protocol.ChatMessage{
+	now := time.Now().UnixMilli()
+	history := []protocol.ChatMessage{{
 		Role:      "user",
 		Content:   userMessage,
 		Channel:   "cli",
-		Timestamp: now.UnixMilli(),
-	})
-	sess.AddMessage(protocol.ChatMessage{
+		Timestamp: now,
+	}, {
 		Role:      "assistant",
 		Content:   assistantReply,
 		Channel:   "cli",
 		Timestamp: time.Now().UnixMilli(),
-	})
-	return sess.Save()
+	}}
+	return session.SaveFromHistory(sessionKey, "cli", "main", modelName, history)
+}
+
+func resolveSessionKey(input string) (string, error) {
+	key := strings.TrimSpace(input)
+	if key == "" {
+		return "", fmt.Errorf("session key cannot be empty")
+	}
+	if strings.HasPrefix(key, "agent:") {
+		return key, nil
+	}
+	candidate := fmt.Sprintf("agent:%s:%s", "main", key)
+	if _, err := session.Load(candidate); err == nil {
+		return candidate, nil
+	}
+	return key, nil
 }
 
 func boolText(ok bool) string {

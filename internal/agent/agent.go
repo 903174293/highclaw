@@ -5,6 +5,8 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +27,171 @@ import (
 )
 
 const maxToolIterations = 10
+
+const (
+	maxHistoryMessages            = 50
+	compactionKeepRecent          = 20
+	compactionMaxSourceChars      = 12000
+	compactionMaxSummaryChars     = 2000
+	compactionSummarySystemPrompt = "You are a conversation compaction engine. Summarize older chat history into concise context for future turns. Preserve: user preferences, commitments, decisions, unresolved tasks, key facts. Omit: filler, repeated chit-chat, verbose tool logs. Output plain text bullet points only."
+)
+
+func autosaveMemoryKey(prefix string) string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%s_%s", prefix, hex.EncodeToString(b))
+}
+
+func conversationMemoryKey(channel, sender, id string) string {
+	channel = strings.TrimSpace(channel)
+	if channel == "" {
+		channel = "unknown"
+	}
+	sender = strings.TrimSpace(sender)
+	if sender == "" {
+		sender = "user"
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		id = fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%s_%s_%s", channel, sender, id)
+}
+
+func buildMemoryContext(reg *ToolRegistry, userMsg, sessionKey string) string {
+	_ = sessionKey
+	if reg == nil || reg.memory == nil {
+		return ""
+	}
+	query := strings.TrimSpace(userMsg)
+	if query == "" {
+		return ""
+	}
+	entries, err := reg.memory.recall(query, "", "", 5)
+	if err != nil || len(entries) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("[Memory context]\n")
+	for _, e := range entries {
+		if strings.TrimSpace(e.Content) == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "- %s: %s\n", e.Key, e.Content)
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+func truncateWithEllipsis(input string, maxChars int) string {
+	if maxChars <= 0 {
+		return ""
+	}
+	runes := []rune(input)
+	if len(runes) <= maxChars {
+		return input
+	}
+	if maxChars <= 1 {
+		return string(runes[:maxChars])
+	}
+	return string(runes[:maxChars-1]) + "…"
+}
+
+func trimHistory(history []ChatMessage) []ChatMessage {
+	if len(history) == 0 {
+		return history
+	}
+	hasSystem := strings.EqualFold(strings.TrimSpace(history[0].Role), "system")
+	start := 0
+	if hasSystem {
+		start = 1
+	}
+	nonSystem := len(history) - start
+	if nonSystem <= maxHistoryMessages {
+		return history
+	}
+	toRemove := nonSystem - maxHistoryMessages
+	trimmed := make([]ChatMessage, 0, len(history)-toRemove)
+	trimmed = append(trimmed, history[:start]...)
+	trimmed = append(trimmed, history[start+toRemove:]...)
+	return trimmed
+}
+
+func buildCompactionTranscript(messages []ChatMessage) string {
+	var b strings.Builder
+	for _, msg := range messages {
+		role := strings.ToUpper(strings.TrimSpace(msg.Role))
+		content := strings.TrimSpace(msg.Content)
+		if role == "" || content == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "%s: %s\n", role, content)
+	}
+	return truncateWithEllipsis(b.String(), compactionMaxSourceChars)
+}
+
+func autoCompactHistory(
+	ctx context.Context,
+	history []ChatMessage,
+	mgr *ModelManager,
+	provider, model string,
+) []ChatMessage {
+	if len(history) == 0 {
+		return history
+	}
+	hasSystem := strings.EqualFold(strings.TrimSpace(history[0].Role), "system")
+	start := 0
+	if hasSystem {
+		start = 1
+	}
+	nonSystem := len(history) - start
+	if nonSystem <= maxHistoryMessages {
+		return history
+	}
+	keepRecent := compactionKeepRecent
+	if keepRecent > nonSystem {
+		keepRecent = nonSystem
+	}
+	compactCount := nonSystem - keepRecent
+	if compactCount <= 0 {
+		return history
+	}
+	compactStart := start
+	compactEnd := start + compactCount
+	toCompact := history[compactStart:compactEnd]
+	recent := history[compactEnd:]
+	transcript := buildCompactionTranscript(toCompact)
+	if strings.TrimSpace(transcript) == "" {
+		return history
+	}
+	summaryReq := &ChatRequest{
+		SystemPrompt: compactionSummarySystemPrompt,
+		Messages: []ChatMessage{{
+			Role:    "user",
+			Content: "Summarize the following conversation history for context preservation. Keep it short (max 12 bullet points).\n\n" + transcript,
+		}},
+		Provider:    strings.TrimSpace(provider),
+		Model:       strings.TrimSpace(model),
+		Temperature: 0.2,
+	}
+	resp, err := mgr.Chat(ctx, summaryReq)
+	summary := transcript
+	if err == nil && strings.TrimSpace(resp.Content) != "" {
+		summary = strings.TrimSpace(resp.Content)
+	}
+	summary = truncateWithEllipsis(summary, compactionMaxSummaryChars)
+	compactedNonSystem := []ChatMessage{{
+		Role:    "assistant",
+		Content: "[Compaction summary]\n" + summary,
+	}}
+	compactedNonSystem = append(compactedNonSystem, recent...)
+	if hasSystem {
+		return append([]ChatMessage{history[0]}, compactedNonSystem...)
+	}
+	return compactedNonSystem
+}
 
 // Runner manages the agent execution loop.
 type Runner struct {
@@ -48,6 +215,8 @@ func NewRunner(cfg *config.Config, logger *slog.Logger) *Runner {
 type RunRequest struct {
 	SessionKey   string
 	Channel      string
+	Sender       string
+	MessageID    string
 	Message      string
 	History      []ChatMessage
 	Images       [][]byte
@@ -90,6 +259,35 @@ func (r *Runner) Run(ctx context.Context, req *RunRequest) (*RunResult, error) {
 
 	// 1. Build system prompt.
 	systemPrompt := r.buildSystemPrompt(req)
+	channel := strings.TrimSpace(req.Channel)
+	if channel == "" {
+		channel = "cli"
+	}
+	sender := strings.TrimSpace(req.Sender)
+	if sender == "" {
+		sender = "user"
+	}
+	userMessage := strings.TrimSpace(req.Message)
+	if userMessage != "" && r.cfg.Memory.AutoSave && r.tools != nil && r.tools.memory != nil {
+		meta := memoryMeta{
+			SessionKey: strings.TrimSpace(req.SessionKey),
+			Channel:    channel,
+			Sender:     sender,
+			MessageID:  strings.TrimSpace(req.MessageID),
+		}
+		if strings.TrimSpace(req.MessageID) != "" {
+			_ = r.tools.memory.store(
+				conversationMemoryKey(channel, sender, req.MessageID),
+				userMessage,
+				"conversation",
+				meta,
+			)
+		}
+		_ = r.tools.memory.store(autosaveMemoryKey("user_msg"), userMessage, "conversation", meta)
+	}
+	if ctxText := buildMemoryContext(r.tools, userMessage, req.SessionKey); ctxText != "" {
+		req.Message = ctxText + req.Message
+	}
 
 	// 2. Run ZeroClaw-style tool loop.
 	history := make([]ChatMessage, 0, len(req.History)+1)
@@ -108,8 +306,18 @@ func (r *Runner) Run(ctx context.Context, req *RunRequest) (*RunResult, error) {
 	}
 	if len(history) == 0 {
 		history = append(history, ChatMessage{Role: "user", Content: req.Message})
+	} else if strings.TrimSpace(req.Message) != "" {
+		// Keep memory-injected text aligned for multi-turn callers that pass explicit history.
+		for i := len(history) - 1; i >= 0; i-- {
+			if strings.EqualFold(strings.TrimSpace(history[i].Role), "user") {
+				history[i].Content = req.Message
+				break
+			}
+		}
 	}
 	var totalUsage TokenUsage
+	history = autoCompactHistory(ctx, history, r.models, strings.TrimSpace(req.Provider), strings.TrimSpace(req.Model))
+	history = trimHistory(history)
 
 	for i := 0; i < maxToolIterations; i++ {
 		modelStart := time.Now()
@@ -140,6 +348,18 @@ func (r *Runner) Run(ctx context.Context, req *RunRequest) (*RunResult, error) {
 				reply = strings.TrimSpace(modelResp.Content)
 			}
 			history = append(history, ChatMessage{Role: "assistant", Content: modelResp.Content})
+			if strings.TrimSpace(reply) != "" && r.cfg.Memory.AutoSave && r.tools != nil && r.tools.memory != nil {
+				_ = r.tools.memory.store(
+					autosaveMemoryKey("assistant_resp"),
+					truncateWithEllipsis(reply, 100),
+					"daily",
+					memoryMeta{
+						SessionKey: strings.TrimSpace(req.SessionKey),
+						Channel:    channel,
+						Sender:     "assistant",
+					},
+				)
+			}
 			return &RunResult{
 				Reply:      reply,
 				TokensUsed: totalUsage,
@@ -1215,6 +1435,8 @@ type ToolSpec struct {
 
 // NewToolRegistry creates a new tool registry with built-in tools.
 func NewToolRegistry(cfg *config.Config, logger *slog.Logger) *ToolRegistry {
+	runMemoryHygieneIfDue(cfg, logger.With("component", "memory"))
+
 	backend := strings.ToLower(strings.TrimSpace(cfg.Memory.Backend))
 	if backend == "" {
 		backend = "sqlite"
@@ -1222,12 +1444,18 @@ func NewToolRegistry(cfg *config.Config, logger *slog.Logger) *ToolRegistry {
 	var store memoryStore
 	switch backend {
 	case "none":
-		store = newDisabledMemoryStore()
+		backend = "markdown"
+		store = newMarkdownMemoryStore(cfg.Agent.Workspace)
 	case "markdown":
 		store = newMarkdownMemoryStore(cfg.Agent.Workspace)
-	default:
+	case "sqlite":
 		backend = "sqlite"
-		store = newSQLiteMemoryStore()
+		store = newSQLiteMemoryStore(cfg)
+	default:
+		runtimeBackend := backend
+		backend = "markdown"
+		logger.Warn("unknown memory backend, falling back to markdown", "backend", runtimeBackend)
+		store = newMarkdownMemoryStore(cfg.Agent.Workspace)
 	}
 
 	reg := &ToolRegistry{
@@ -1245,8 +1473,8 @@ func NewToolRegistry(cfg *config.Config, logger *slog.Logger) *ToolRegistry {
 	// Register built-in tools.
 	reg.Register("shell", "Execute terminal commands. Use for local checks/build/tests/diagnostics.", `{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer"}},"required":["command"]}`, reg.securedBashTool())
 	reg.Register("bash", "Alias of shell. Execute terminal commands.", `{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer"}},"required":["command"]}`, reg.securedBashTool())
-	reg.Register("memory_store", "Save to memory. Persist durable preferences/decisions/context.", `{"type":"object","properties":{"key":{"type":"string"},"content":{"type":"string"},"value":{"type":"string"}}}`, reg.memoryStoreTool())
-	reg.Register("memory_recall", "Search memory and return matching entries.", `{"type":"object","properties":{"query":{"type":"string"},"key":{"type":"string"},"limit":{"type":"integer"}}}`, reg.memoryRecallTool())
+	reg.Register("memory_store", "Save to memory. Persist durable preferences/decisions/context.", `{"type":"object","properties":{"key":{"type":"string"},"content":{"type":"string"},"category":{"type":"string","enum":["core","daily","conversation"]}},"required":["key","content"]}`, reg.memoryStoreTool())
+	reg.Register("memory_recall", "Search memory and return matching entries.", `{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"]}`, reg.memoryRecallTool())
 	reg.Register("memory_forget", "Delete a memory entry by key.", `{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}`, reg.memoryForgetTool())
 
 	return reg
@@ -1324,20 +1552,26 @@ func (r *ToolRegistry) memoryStoreTool() ToolHandler {
 		key := strings.TrimSpace(stringValue(payload["key"]))
 		content := strings.TrimSpace(stringValue(payload["content"]))
 		if key == "" {
-			key = fmt.Sprintf("mem_%d", time.Now().UnixNano())
+			return "", fmt.Errorf("Missing 'key' parameter")
 		}
 		if content == "" {
-			content = strings.TrimSpace(stringValue(payload["value"]))
+			return "", fmt.Errorf("Missing 'content' parameter")
 		}
-		if content == "" {
-			return "", fmt.Errorf("content is required")
+		category := strings.ToLower(strings.TrimSpace(stringValue(payload["category"])))
+		if category == "" {
+			category = "core"
 		}
-		if err := r.memory.store(key, content); err != nil {
+		switch category {
+		case "core", "daily", "conversation":
+		default:
+			category = "core"
+		}
+		if err := r.memory.store(key, content, category, memoryMeta{}); err != nil {
 			r.logger.Error("memory store failed", "key", key, "error", err)
 			return "", err
 		}
-		r.logger.Info("memory stored", "key", key, "content_len", len(content))
-		return "Memory stored successfully", nil
+		r.logger.Info("memory stored", "key", key, "category", category, "content_len", len(content))
+		return fmt.Sprintf("Stored memory: %s", key), nil
 	}
 }
 
@@ -1345,32 +1579,36 @@ func (r *ToolRegistry) memoryRecallTool() ToolHandler {
 	return func(ctx context.Context, input string) (string, error) {
 		_ = ctx
 		var payload map[string]any
-		if strings.TrimSpace(input) != "" {
-			_ = json.Unmarshal([]byte(input), &payload)
+		if err := json.Unmarshal([]byte(input), &payload); err != nil {
+			return "", fmt.Errorf("invalid memory_recall input: %w", err)
 		}
-		query := strings.ToLower(strings.TrimSpace(stringValue(payload["query"])))
-		key := strings.TrimSpace(stringValue(payload["key"]))
-		if query == "" && key != "" {
-			query = strings.ToLower(key)
+		query := strings.TrimSpace(stringValue(payload["query"]))
+		if query == "" {
+			return "", fmt.Errorf("Missing 'query' parameter")
 		}
-		limit := intValue(payload["limit"], 5)
-		if limit <= 0 {
-			limit = 5
+		limit := 5
+		if rawLimit, ok := payload["limit"]; ok {
+			limit = intValue(rawLimit, 0)
 		}
-		entries, err := r.memory.recall(query, key, limit)
+		entries, err := r.memory.recall(query, "", "", limit)
 		if err != nil {
-			r.logger.Error("memory recall failed", "query", query, "key", key, "error", err)
+			r.logger.Error("memory recall failed", "query", query, "error", err)
 			return "", err
 		}
-		out := make([]string, 0, len(entries))
+		if len(entries) == 0 {
+			r.logger.Info("memory recall empty", "query", query)
+			return "No memories found matching that query.", nil
+		}
+		out := make([]string, 0, len(entries)+1)
+		out = append(out, fmt.Sprintf("Found %d memories:", len(entries)))
 		for _, e := range entries {
-			out = append(out, fmt.Sprintf("%s: %s", e.Key, e.Content))
+			scoreText := ""
+			if e.Score > 0 {
+				scoreText = fmt.Sprintf(" [%.0f%%]", e.Score*100)
+			}
+			out = append(out, fmt.Sprintf("- [%s] %s: %s%s", e.Category, e.Key, e.Content, scoreText))
 		}
-		if len(out) == 0 {
-			r.logger.Info("memory recall empty", "query", query, "key", key)
-			return "No memory found", nil
-		}
-		r.logger.Info("memory recalled", "query", query, "key", key, "count", len(out))
+		r.logger.Info("memory recalled", "query", query, "count", len(entries))
 		return strings.Join(out, "\n"), nil
 	}
 }
@@ -1384,14 +1622,19 @@ func (r *ToolRegistry) memoryForgetTool() ToolHandler {
 		}
 		key := strings.TrimSpace(stringValue(payload["key"]))
 		if key == "" {
-			return "", fmt.Errorf("key is required")
+			return "", fmt.Errorf("Missing 'key' parameter")
 		}
-		if err := r.memory.forget(key); err != nil {
+		removed, err := r.memory.forget(key)
+		if err != nil {
 			r.logger.Error("memory forget failed", "key", key, "error", err)
 			return "", err
 		}
-		r.logger.Info("memory forgotten", "key", key)
-		return "Memory entry removed", nil
+		if removed {
+			r.logger.Info("memory forgotten", "key", key)
+			return fmt.Sprintf("Forgot memory: %s", key), nil
+		}
+		r.logger.Info("memory forget no-op", "key", key)
+		return fmt.Sprintf("No memory found with key: %s", key), nil
 	}
 }
 

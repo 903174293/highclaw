@@ -136,10 +136,33 @@ highclaw migrate openclaw
 HighClaw now uses one unified local session store (`~/.highclaw/sessions`) for both CLI and TUI:
 
 - Every `highclaw agent -m "..."` run is persisted as a **new session**.
+- You can bind a message to an existing session: `highclaw agent -m "..." --session <key>`.
 - `highclaw tui` loads those sessions in the left sidebar.
 - You can switch sessions in TUI and continue chatting from any saved context.
 - The sidebar groups sessions by source: **CLI / TUI / OTHER**.
 - Sidebar supports live filter: focus sidebar and type keywords.
+
+### Session management commands
+
+```bash
+highclaw sessions list
+highclaw sessions get <key>
+highclaw sessions current
+highclaw sessions switch <key>
+highclaw sessions reset <key>
+highclaw sessions delete <key>
+highclaw sessions bindings
+highclaw sessions bind <channel> <conversation> <sessionKey>
+highclaw sessions unbind <channel> <conversation>
+```
+
+### External channels default session policy
+
+- Non-switchable terminals/channels (e.g. WhatsApp/Telegram/webhook/websocket) use a default external session:
+  - `agent:main:main`
+- You can override per conversation with binding commands:
+  - `sessions bind <channel> <conversation> <sessionKey>`
+- CLI/TUI keep explicit session switching support.
 
 ### TUI key actions
 
@@ -497,7 +520,10 @@ See [aieos.org](https://aieos.org) for the full schema and live examples.
 | `onboard --interactive` | Full interactive 8-step wizard |
 | `onboard --channels-only` | Reconfigure channels/allowlists only (fast repair flow) |
 | `agent -m "..."` | Single message mode |
+| `agent -m "..." --session <key>` | Continue in an existing session |
 | `agent` | Interactive chat mode |
+| `sessions list/get/current/switch/reset/delete` | Session query + switching + cleanup |
+| `sessions bindings/bind/unbind` | External conversation → session routing |
 | `gateway` | Start webhook server (default: `127.0.0.1:8080`) |
 | `gateway --port 0` | Random port mode |
 | `daemon` | Start long-running autonomous runtime |
@@ -595,10 +621,14 @@ HighClaw is an open-source project maintained with passion. If you find it usefu
 ## License
 
 MIT — see [LICENSE](LICENSE)
+- IP policy — see [INTELLECTUAL_PROPERTY.md](INTELLECTUAL_PROPERTY.md)
+- Trademark policy — see [TRADEMARKS.md](TRADEMARKS.md)
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Implement a trait, submit a PR:
+- Individual CLA (required) — see [CLA-INDIVIDUAL.md](CLA-INDIVIDUAL.md)
+- Security reporting — see [SECURITY.md](SECURITY.md)
 - CI workflow guide: [docs/ci-map.md](docs/ci-map.md)
 - New `Provider` → `src/providers/`
 - New `Channel` → `src/channels/`

@@ -136,10 +136,33 @@ highclaw migrate openclaw
 HighClaw 统一使用 `~/.highclaw/sessions`：
 
 - 每次执行 `highclaw agent -m "..."` 都会落盘为一个新会话。
+- 也可以把消息追加到指定会话：`highclaw agent -m "..." --session <key>`。
 - `highclaw tui` 左侧栏会展示这些会话。
 - TUI 支持会话切换并继续上下文对话。
 - 左侧栏按来源分组展示：**CLI / TUI / OTHER**。
 - 会话栏支持实时过滤：切到会话栏后直接输入关键字即可。
+
+### 会话管理命令
+
+```bash
+highclaw sessions list
+highclaw sessions get <key>
+highclaw sessions current
+highclaw sessions switch <key>
+highclaw sessions reset <key>
+highclaw sessions delete <key>
+highclaw sessions bindings
+highclaw sessions bind <channel> <conversation> <sessionKey>
+highclaw sessions unbind <channel> <conversation>
+```
+
+### 外接终端默认会话策略
+
+- 不支持手动切换会话的终端/渠道（如 WhatsApp/Telegram/webhook/websocket）默认使用：
+  - `agent:main:main`
+- 如需按会话隔离，可绑定到指定会话：
+  - `sessions bind <channel> <conversation> <sessionKey>`
+- CLI/TUI 继续保留手动切换会话能力。
 
 ### TUI 常用按键
 
@@ -495,7 +518,10 @@ See [aieos.org](https://aieos.org) for the full schema and live examples.
 | `onboard --interactive` | Full interactive 8-step wizard |
 | `onboard --channels-only` | Reconfigure channels/allowlists only (fast repair flow) |
 | `agent -m "..."` | Single message mode |
+| `agent -m "..." --session <key>` | 追加到指定会话 |
 | `agent` | Interactive chat mode |
+| `sessions list/get/current/switch/reset/delete` | 会话查询、切换与清理 |
+| `sessions bindings/bind/unbind` | 外部会话路由绑定 |
 | `gateway` | Start webhook server (default: `127.0.0.1:8080`) |
 | `gateway --port 0` | Random port mode |
 | `daemon` | Start long-running autonomous runtime |
@@ -593,10 +619,14 @@ HighClaw is an open-source project maintained with passion. If you find it usefu
 ## License
 
 MIT — see [LICENSE](LICENSE)
+- IP policy — see [INTELLECTUAL_PROPERTY.md](INTELLECTUAL_PROPERTY.md)
+- Trademark policy — see [TRADEMARKS.md](TRADEMARKS.md)
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Implement a trait, submit a PR:
+- Individual CLA (required) — see [CLA-INDIVIDUAL.md](CLA-INDIVIDUAL.md)
+- Security reporting — see [SECURITY.md](SECURITY.md)
 - CI workflow guide: [docs/ci-map.md](docs/ci-map.md)
 - New `Provider` → `src/providers/`
 - New `Channel` → `src/channels/`

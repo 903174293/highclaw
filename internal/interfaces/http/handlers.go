@@ -13,6 +13,7 @@ import (
 	"github.com/highclaw/highclaw/internal/config"
 	"github.com/highclaw/highclaw/internal/domain/model"
 	"github.com/highclaw/highclaw/internal/gateway/protocol"
+	"github.com/highclaw/highclaw/internal/gateway/session"
 )
 
 // handleHealth returns the health status.
@@ -502,7 +503,12 @@ func (s *Server) handleChat(c *gin.Context) {
 
 	sessionKey := req.Session
 	if sessionKey == "" {
-		sessionKey = "main"
+		resolved, err := session.ResolveSession("web", c.ClientIP())
+		if err == nil && strings.TrimSpace(resolved) != "" {
+			sessionKey = resolved
+		} else {
+			sessionKey = session.DefaultExternalSessionKey
+		}
 	}
 
 	var history []agent.ChatMessage
@@ -528,6 +534,8 @@ func (s *Server) handleChat(c *gin.Context) {
 	result, err := s.agent.Run(c.Request.Context(), &agent.RunRequest{
 		SessionKey: sessionKey,
 		Channel:    "web",
+		Sender:     c.ClientIP(),
+		MessageID:  strings.TrimSpace(c.GetHeader("X-Idempotency-Key")),
 		Message:    req.Message,
 		History:    history,
 	})

@@ -28,6 +28,12 @@ __pycache__/
 *.md
 !README.md
 !README.zh.md
+!CONTRIBUTING.md
+!SECURITY.md
+!TRADEMARKS.md
+!INTELLECTUAL_PROPERTY.md
+!CLA-INDIVIDUAL.md
+!.github/pull_request_template.md
 !**/README.md
 ui/src/ui/__screenshots__/
 ui/playwright-report/
