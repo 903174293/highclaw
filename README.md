@@ -753,28 +753,187 @@ See [aieos.org](https://aieos.org) for the full schema and live examples.
 
 ## Commands
 
+HighClaw provides 40+ CLI commands organized by function. All commands follow the pattern `highclaw <command> [subcommand] [flags]`.
+
+### Setup & Onboarding
+
 | Command | Description |
 |---------|-------------|
-| `onboard` | Quick setup (default) |
-| `onboard --interactive` | Full interactive 9-step wizard |
-| `onboard --channels-only` | Reconfigure channels/allowlists only (fast repair flow) |
-| `agent -m "..."` | Single message mode |
-| `agent -m "..." --session <key>` | Continue in an existing session |
-| `agent` | Interactive chat mode |
-| `sessions list/get/current/switch/reset/delete` | Session query + switching + cleanup |
-| `sessions bindings/bind/unbind` | External conversation → session routing |
-| `gateway` | Start webhook server (default: `127.0.0.1:8080`) |
-| `gateway --port 0` | Random port mode |
-| `daemon` | Start long-running autonomous runtime |
-| `service install/start/stop/status/uninstall` | Manage user-level background service |
-| `doctor` | Diagnose daemon/scheduler/channel freshness |
-| `status` | Show full system status |
-| `channel doctor` | Run health checks for configured channels |
-| `integrations info <name>` | Show setup/status details for one integration |
-| `skills list` | List all installed skills (open-skills + workspace) |
-| `skills install <url\|path>` | Install a skill from GitHub URL or local path |
-| `skills uninstall <name>` | Remove an installed skill |
-| `skills status` | Show skills summary and counts |
+| `highclaw onboard --api-key sk-... --provider openrouter` | Quick non-interactive setup with API key and provider |
+| `highclaw onboard --interactive` | Full interactive 9-step wizard (provider, model, channels, tunnel, skills, etc.) |
+| `highclaw onboard --channels-only` | Fast repair flow — reconfigure channels and allowlists only |
+| `highclaw config show` | Display the full configuration file |
+| `highclaw config get <key>` | Get a single configuration value |
+| `highclaw config set <key> <value>` | Set a configuration value |
+| `highclaw config validate` | Validate configuration file for errors |
+
+### AI Agent & Chat
+
+| Command | Description |
+|---------|-------------|
+| `highclaw agent` | Start interactive chat mode (multi-turn conversation) |
+| `highclaw agent -m "Hello"` | Send a single message and print the response |
+| `highclaw agent -m "..." --session <key>` | Send a message within a specific session |
+| `highclaw agent -l` | Continue the most recent session |
+| `highclaw agent --provider anthropic --model claude-sonnet-4` | Override provider and model for one run |
+| `highclaw agent rpc` | Start agent in RPC mode (JSON stdin/stdout, for tool integration) |
+| `highclaw message "Hello"` | Shortcut — send a single message and print the response |
+| `highclaw tui` | Launch the terminal UI for interactive chat |
+| `highclaw tui --session main --model gpt-4o` | Launch TUI with specific session and model |
+
+### Gateway & Daemon
+
+| Command | Description |
+|---------|-------------|
+| `highclaw gateway` | Start the WebSocket + HTTP gateway (default: `127.0.0.1:18789`) |
+| `highclaw gateway --port 3000` | Start gateway on a custom port |
+| `highclaw gateway --port 0` | Random port mode (security hardened) |
+| `highclaw gateway --bind all --dev` | Bind to all interfaces in dev mode |
+| `highclaw daemon` | Start the full autonomous runtime (background) |
+| `highclaw daemon install` | Install HighClaw as a system daemon (launchd/systemd) |
+| `highclaw daemon start` | Start the installed daemon |
+| `highclaw daemon stop` | Stop the running daemon |
+| `highclaw daemon status` | Show daemon running status |
+| `highclaw daemon uninstall` | Remove the system daemon |
+| `highclaw service install\|start\|stop\|status` | Alias of `daemon` — identical behavior |
+
+### Channels (Messaging Integrations)
+
+| Command | Description |
+|---------|-------------|
+| `highclaw channels status` | Show status of all configured channels |
+| `highclaw channels doctor` | Run health diagnostics for all channels |
+| `highclaw channels login <name>` | Login to a messaging channel (e.g. WhatsApp QR) |
+| `highclaw channels logout <name>` | Logout from a messaging channel |
+| `highclaw channels send <channel> <to> <text>` | Send a message through a specific channel |
+| `highclaw integrations info Telegram` | Show setup details and required config keys for a channel |
+
+Supported channels: **Telegram, Discord, Slack, WhatsApp, Feishu/Lark, WeCom, WeChat, iMessage, Matrix, IRC, Signal, Webhook**.
+
+### Sessions
+
+| Command | Description |
+|---------|-------------|
+| `highclaw sessions list` | List all active sessions |
+| `highclaw sessions current` | Show the current active session |
+| `highclaw sessions get <key>` | Get details for a specific session |
+| `highclaw sessions switch <key>` | Switch to a different session |
+| `highclaw sessions reset <key>` | Clear message history for a session |
+| `highclaw sessions delete <key>` | Delete a session |
+| `highclaw sessions bind <channel> <conv-id> <session-key>` | Bind an external conversation to a session |
+| `highclaw sessions unbind <channel> <conv-id>` | Remove an external conversation binding |
+| `highclaw sessions bindings` | List all external channel session bindings |
+| `highclaw sessions prune` | Clean up stale and excess sessions |
+
+### Memory
+
+| Command | Description |
+|---------|-------------|
+| `highclaw memory status` | Show memory backend status (SQLite, entry count, index health) |
+| `highclaw memory list` | List all memory entries |
+| `highclaw memory get <key>` | Retrieve a specific memory entry by key |
+| `highclaw memory search <query>` | Search memory for relevant context (semantic + keyword) |
+| `highclaw memory sync` | Sync memory from session files |
+| `highclaw memory reset` | Reset the memory index |
+
+### Skills
+
+| Command | Description |
+|---------|-------------|
+| `highclaw skills list` | List all installed skills (open-skills + workspace) |
+| `highclaw skills install <url\|path>` | Install a skill from GitHub URL or local path |
+| `highclaw skills uninstall <name>` | Remove an installed skill |
+| `highclaw skills status` | Show skills summary and counts |
+
+### Models & Providers
+
+| Command | Description |
+|---------|-------------|
+| `highclaw models list` | List available models from all configured providers |
+| `highclaw models scan` | Scan and discover available models from providers |
+| `highclaw models set <model>` | Set the default model |
+
+### Diagnostics & Status
+
+| Command | Description |
+|---------|-------------|
+| `highclaw status` | Comprehensive status: gateway, sessions, channels, daemon, agent, models |
+| `highclaw doctor` | Full diagnostics: config, auth, gateway, sandbox, security, workspace |
+| `highclaw dns` | DNS diagnostics and configuration checks |
+| `highclaw logs tail` | Stream live gateway logs |
+| `highclaw logs query <pattern>` | Search historical logs |
+
+### Security & Approvals
+
+| Command | Description |
+|---------|-------------|
+| `highclaw security audit` | Run security audit on config, files, and channels |
+| `highclaw security fix` | Auto-fix security issues found by audit |
+| `highclaw exec-approvals list` | List pending tool execution approvals |
+| `highclaw exec-approvals approve <id>` | Approve a pending execution |
+| `highclaw exec-approvals deny <id>` | Deny a pending execution |
+
+### Browser Control
+
+| Command | Description |
+|---------|-------------|
+| `highclaw browser open <url>` | Open a URL in the controlled browser (CDP/headless) |
+| `highclaw browser inspect` | Inspect current browser state |
+
+### Scheduled Tasks (Cron)
+
+| Command | Description |
+|---------|-------------|
+| `highclaw cron list` | List all scheduled tasks |
+| `highclaw cron create` | Create a new scheduled task |
+| `highclaw cron delete <id>` | Delete a scheduled task |
+| `highclaw cron trigger <id>` | Manually trigger a scheduled task |
+
+### Hooks & Webhooks
+
+| Command | Description |
+|---------|-------------|
+| `highclaw hooks list` | List installed hooks (Gmail, webhooks, internal) |
+| `highclaw hooks install <name>` | Install a hook |
+| `highclaw hooks status` | Show hooks status |
+| `highclaw webhooks` | Manage inbound/outbound webhooks |
+
+### Device & Node Management
+
+| Command | Description |
+|---------|-------------|
+| `highclaw devices list` | List paired devices |
+| `highclaw nodes list` | List connected nodes (macOS/iOS/Android) |
+| `highclaw pairing` | Manage device pairing (QR codes, tokens) |
+
+### Plugins
+
+| Command | Description |
+|---------|-------------|
+| `highclaw plugins list` | List installed plugins |
+| `highclaw plugins install <name>` | Install a plugin |
+| `highclaw plugins sync` | Sync plugin versions |
+
+### Data Migration
+
+| Command | Description |
+|---------|-------------|
+| `highclaw migrate openclaw` | Migrate config/workspace from `~/.openclaw` to `~/.highclaw` |
+| `highclaw migrate openclaw --dry-run` | Preview migration without writing (safe) |
+
+### System Lifecycle
+
+| Command | Description |
+|---------|-------------|
+| `highclaw update check` | Check for available updates |
+| `highclaw update install` | Install the latest update |
+| `highclaw reset --yes` | Reset all state (sessions, cache); keeps config by default |
+| `highclaw reset --yes --keep-config=false` | Full factory reset |
+| `highclaw uninstall --yes` | Uninstall HighClaw and clean up all data |
+| `highclaw version` | Print version information |
+| `highclaw docs` | Open documentation in browser |
+| `highclaw dashboard` | Open the web dashboard |
+| `highclaw completion bash\|zsh\|fish\|powershell` | Generate shell autocompletion script |
 
 ## Skills System
 
