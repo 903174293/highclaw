@@ -970,7 +970,6 @@ Supported channels: **Telegram, Discord, Slack, WhatsApp, Feishu/Lark, WeCom, We
 | `highclaw uninstall --yes` | Uninstall HighClaw and clean up all data |
 | `highclaw version` | Print version information |
 | `highclaw docs` | Open documentation in browser |
-| `highclaw dashboard` | Open the web dashboard |
 | `highclaw completion bash\|zsh\|fish\|powershell` | Generate shell autocompletion script |
 
 ## Skills System

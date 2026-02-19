@@ -35,6 +35,8 @@ type Config struct {
 	TaskLog       TaskLogConfig       `json:"taskLog"`
 }
 
+
+
 // LogConfig 文件日志管理配置
 type LogConfig struct {
 	// Dir 日志文件目录，默认 ~/.highclaw/logs

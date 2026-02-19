@@ -195,7 +195,6 @@ func runGateway(cmd *cobra.Command, args []string) error {
 	}()
 
 	slog.Info("HighClaw gateway ready", "port", cfg.Gateway.Port)
-	slog.Info("Web UI ready", "url", fmt.Sprintf("http://localhost:%d", cfg.Gateway.Port))
 	if logMgr != nil {
 		slog.Info("log files", "dir", logMgr.LogDir(), "file", logMgr.CurrentLogFile())
 	}

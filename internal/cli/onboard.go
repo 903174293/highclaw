@@ -427,9 +427,9 @@ func setupChannels() config.ChannelsConfig {
 			statusLineWithText("WhatsApp", channelState(out.WhatsApp != nil, "✅ connected", "— Business Cloud API")),
 			statusLineWithText("IRC", channelState(out.IRC != nil, "✅ configured", "— IRC over TLS")),
 			statusLineWithText("Webhook", channelState(out.Webhook != nil, "✅ configured", "— HTTP endpoint")),
-			statusLineWithText("飞书 Feishu", channelState(out.Feishu != nil, "✅ connected", "— 企业协作平台")),
-			statusLineWithText("企业微信 WeCom", channelState(out.WeCom != nil, "✅ connected", "— 企业通讯工具")),
-			statusLineWithText("微信 WeChat", channelState(out.WeChat != nil, "✅ connected", "— 公众号/个人号")),
+			statusLineWithText("Feishu", channelState(out.Feishu != nil, "✅ connected", "— Enterprise collaboration platform")),
+			statusLineWithText("WeCom", channelState(out.WeCom != nil, "✅ connected", "— Enterprise messaging")),
+			statusLineWithText("WeChat", channelState(out.WeChat != nil, "✅ connected", "— Official Account / Personal")),
 			"Done — finish setup",
 		}
 		choice := promptSelect("Connect a channel (or Done to continue)", options, 11)
@@ -625,10 +625,10 @@ func setupChannels() config.ChannelsConfig {
 			fmt.Printf("  ✅ Webhook on port %d\n\n", port)
 		case 8:
 			fmt.Println()
-			fmt.Println("  飞书 Setup — 连接飞书企业协作平台")
-			printBullet("1. 访问 https://open.feishu.cn/app 创建企业自建应用")
-			printBullet("2. 添加机器人能力，获取 App ID 和 App Secret")
-			printBullet("3. 配置事件订阅的 Request URL 和 Encrypt Key")
+			fmt.Println("  Feishu Setup — Connect to Feishu/Lark")
+			printBullet("1. Visit https://open.feishu.cn/app to create a custom app")
+			printBullet("2. Add Bot capability, get App ID and App Secret")
+			printBullet("3. Configure event subscription Request URL and Encrypt Key")
 			fmt.Println()
 			appID := strings.TrimSpace(promptString("App ID", ""))
 			appSecret := strings.TrimSpace(promptString("App Secret", ""))
@@ -636,9 +636,9 @@ func setupChannels() config.ChannelsConfig {
 				fmt.Println("  → Skipped")
 				continue
 			}
-			verifyToken := strings.TrimSpace(promptString("Verification Token (可选)", ""))
-			encryptKey := strings.TrimSpace(promptString("Encrypt Key (可选)", ""))
-			users := parseCSV(promptString("允许的用户 ID (逗号分隔, * 表示所有)", "*"))
+			verifyToken := strings.TrimSpace(promptString("Verification Token (optional)", ""))
+			encryptKey := strings.TrimSpace(promptString("Encrypt Key (optional)", ""))
+			users := parseCSV(promptString("Allowed user IDs (comma-separated, * for all)", "*"))
 			out.Feishu = &config.FeishuConfig{
 				AppID:        appID,
 				AppSecret:    appSecret,
@@ -646,16 +646,16 @@ func setupChannels() config.ChannelsConfig {
 				EncryptKey:   encryptKey,
 				AllowedUsers: users,
 			}
-			fmt.Println("  ✅ 飞书配置完成")
+			fmt.Println("  ✅ Feishu configured")
 			fmt.Println()
 		case 9:
 			fmt.Println()
-			fmt.Println("  企业微信 Setup — 连接企业微信")
-			printBullet("1. 访问 https://work.weixin.qq.com 管理后台")
-			printBullet("2. 创建自建应用，获取 Corp ID、Agent ID 和 Secret")
-			printBullet("3. 配置接收消息服务器的 Token 和 EncodingAESKey")
+			fmt.Println("  WeCom Setup — Connect to WeCom")
+			printBullet("1. Visit https://work.weixin.qq.com admin console")
+			printBullet("2. Create a custom app, get Corp ID, Agent ID and Secret")
+			printBullet("3. Configure message server Token and EncodingAESKey")
 			fmt.Println()
-			corpID := strings.TrimSpace(promptString("Corp ID (企业 ID)", ""))
+			corpID := strings.TrimSpace(promptString("Corp ID", ""))
 			agentIDStr := strings.TrimSpace(promptString("Agent ID", ""))
 			secret := strings.TrimSpace(promptString("Secret", ""))
 			if corpID == "" || secret == "" {
@@ -663,9 +663,9 @@ func setupChannels() config.ChannelsConfig {
 				continue
 			}
 			agentID, _ := strconv.Atoi(agentIDStr)
-			token := strings.TrimSpace(promptString("Token (可选)", ""))
-			encodingKey := strings.TrimSpace(promptString("EncodingAESKey (可选)", ""))
-			users := parseCSV(promptString("允许的用户 ID (逗号分隔, * 表示所有)", "*"))
+			token := strings.TrimSpace(promptString("Token (optional)", ""))
+			encodingKey := strings.TrimSpace(promptString("EncodingAESKey (optional)", ""))
+			users := parseCSV(promptString("Allowed user IDs (comma-separated, * for all)", "*"))
 			out.WeCom = &config.WeComConfig{
 				CorpID:         corpID,
 				AgentID:        agentID,
@@ -674,22 +674,22 @@ func setupChannels() config.ChannelsConfig {
 				EncodingAESKey: encodingKey,
 				AllowedUsers:   users,
 			}
-			fmt.Println("  ✅ 企业微信配置完成")
+			fmt.Println("  ✅ WeCom configured")
 			fmt.Println()
 		case 10:
 			fmt.Println()
-			fmt.Println("  微信 Setup — 连接微信公众号或个人号")
-			printBullet("公众号模式: 需要认证服务号，支持客服消息")
-			printBullet("个人号模式: 需要第三方桥接服务 (如 wechaty)")
+			fmt.Println("  WeChat Setup — Connect Official Account or Personal")
+			printBullet("Official Account: requires verified service account")
+			printBullet("Personal: requires bridge service (e.g. wechaty)")
 			fmt.Println()
-			modes := []string{"公众号 Official Account", "个人号 Personal (需桥接服务)"}
-			modeIdx := promptSelect("选择微信接入模式", modes, 0)
-			fmt.Printf("  选择微信接入模式: %s\n", modes[modeIdx])
+			modes := []string{"Official Account", "Personal (via bridge)"}
+			modeIdx := promptSelect("Select WeChat mode", modes, 0)
+			fmt.Printf("  Select WeChat mode: %s\n", modes[modeIdx])
 			if modeIdx == 0 {
 				fmt.Println()
-				printBullet("1. 访问 https://mp.weixin.qq.com 微信公众平台")
-				printBullet("2. 获取 AppID 和 AppSecret")
-				printBullet("3. 配置服务器配置的 Token 和 EncodingAESKey")
+				printBullet("1. Visit https://mp.weixin.qq.com")
+				printBullet("2. Get AppID and AppSecret")
+				printBullet("3. Configure server Token and EncodingAESKey")
 				fmt.Println()
 				appID := strings.TrimSpace(promptString("AppID", ""))
 				appSecret := strings.TrimSpace(promptString("AppSecret", ""))
@@ -698,8 +698,8 @@ func setupChannels() config.ChannelsConfig {
 					continue
 				}
 				token := strings.TrimSpace(promptString("Token", ""))
-				encodingKey := strings.TrimSpace(promptString("EncodingAESKey (可选)", ""))
-				users := parseCSV(promptString("允许的用户 OpenID (逗号分隔, * 表示所有)", "*"))
+				encodingKey := strings.TrimSpace(promptString("EncodingAESKey (optional)", ""))
+				users := parseCSV(promptString("Allowed user OpenIDs (comma-separated, * for all)", "*"))
 				out.WeChat = &config.WeChatConfig{
 					Mode:           "official",
 					AppID:          appID,
@@ -710,16 +710,16 @@ func setupChannels() config.ChannelsConfig {
 				}
 			} else {
 				fmt.Println()
-				printBullet("个人号模式需要运行 wechaty 或类似桥接服务")
-				printBullet("桥接服务会提供 HTTP API 供 HighClaw 调用")
+				printBullet("Personal mode requires wechaty or similar bridge service")
+				printBullet("Bridge service provides HTTP API for HighClaw to call")
 				fmt.Println()
-				bridgeURL := strings.TrimSpace(promptString("桥接服务 URL (如 http://localhost:8788)", ""))
+				bridgeURL := strings.TrimSpace(promptString("Bridge URL (e.g. http://localhost:8788)", ""))
 				if bridgeURL == "" {
 					fmt.Println("  → Skipped")
 					continue
 				}
-				bridgeToken := strings.TrimSpace(promptString("桥接服务 Token (可选)", ""))
-				users := parseCSV(promptString("允许的用户 wxid (逗号分隔, * 表示所有)", "*"))
+				bridgeToken := strings.TrimSpace(promptString("Bridge Token (optional)", ""))
+				users := parseCSV(promptString("Allowed wxids (comma-separated, * for all)", "*"))
 				out.WeChat = &config.WeChatConfig{
 					Mode:                "personal",
 					PersonalBridgeURL:   bridgeURL,
@@ -727,7 +727,7 @@ func setupChannels() config.ChannelsConfig {
 					AllowedUsers:        users,
 				}
 			}
-			fmt.Println("  ✅ 微信配置完成")
+			fmt.Println("  ✅ WeChat configured")
 			fmt.Println()
 		default:
 			fmt.Printf("  %s Channels: %s\n", green("✓"), green(channelsSummary(out)))

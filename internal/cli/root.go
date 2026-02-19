@@ -78,7 +78,6 @@ func init() {
 	rootCmd.AddCommand(pairingCmd)
 	rootCmd.AddCommand(dnsCmd)
 	rootCmd.AddCommand(docsCmd)
-	rootCmd.AddCommand(dashboardCmd)
 	rootCmd.AddCommand(execApprovalsCmd)
 }
 

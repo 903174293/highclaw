@@ -1803,23 +1803,6 @@ var docsCmd = &cobra.Command{
 	},
 }
 
-var dashboardCmd = &cobra.Command{
-	Use:   "dashboard",
-	Short: "Open the web dashboard",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load()
-		if err != nil {
-			return err
-		}
-		url := fmt.Sprintf("http://127.0.0.1:%d", cfg.Gateway.Port)
-		if err := openURL(url); err != nil {
-			return err
-		}
-		fmt.Printf("opened dashboard: %s\n", url)
-		return nil
-	},
-}
-
 var serviceCmd = &cobra.Command{
 	Use:   "service",
 	Short: "Manage background service (alias of daemon)",
