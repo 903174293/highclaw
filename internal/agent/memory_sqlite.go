@@ -305,9 +305,13 @@ func (s *sqliteMemoryStore) listPaged(p memoryListParams) ([]memoryEntry, int, e
 	copy(countArgs, args)
 	_ = db.QueryRow("SELECT COUNT(*) FROM memory_entries"+where, countArgs...).Scan(&total)
 
-	// 排序
+	// 排序字段白名单，防止 SQL 注入
 	sortCol := "updated_at"
-	if p.SortBy == "created_at" || p.SortBy == "key" {
+	allowedSortCols := map[string]bool{
+		"updated_at": true, "created_at": true, "key": true,
+		"category": true, "channel": true, "sender": true,
+	}
+	if p.SortBy != "" && allowedSortCols[p.SortBy] {
 		sortCol = p.SortBy
 	}
 	sortDir := "DESC"
