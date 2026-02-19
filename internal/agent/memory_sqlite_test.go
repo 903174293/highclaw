@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -32,6 +33,13 @@ func (f fakeEmbedder) embedBatch(texts []string) ([][]float32, error) {
 		result[i] = vec
 	}
 	return result, nil
+}
+
+// queryScalar 测试辅助：执行 SQL 返回单个字符串值
+func queryScalar(db *sql.DB, query string, args ...any) string {
+	var v string
+	_ = db.QueryRow(query, args...).Scan(&v)
+	return v
 }
 
 func TestSQLiteMemoryStoreStoreRecallForget(t *testing.T) {
@@ -109,19 +117,27 @@ func TestSQLiteMemoryStoreSchemaHasEmbeddingCache(t *testing.T) {
 	if err := store.init(); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	out, err := store.execTabs("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='embedding_cache';")
-	if err != nil {
-		t.Fatalf("query sqlite_master: %v", err)
+	db := store.dbForHygiene()
+	cnt := queryScalar(db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='embedding_cache'")
+	if cnt != "1" {
+		t.Fatalf("expected embedding_cache table, got %q", cnt)
 	}
-	if got := out; got == "" || got[0] != '1' {
-		t.Fatalf("expected embedding_cache table, got %q", out)
+	var hasEmb bool
+	rows, _ := db.Query("PRAGMA table_info(memory_entries)")
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var dflt sql.NullString
+		var pk int
+		rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk)
+		if name == "embedding" {
+			hasEmb = true
+		}
 	}
-	cols, err := store.execTabs("PRAGMA table_info(memory_entries);")
-	if err != nil {
-		t.Fatalf("pragma table_info: %v", err)
-	}
-	if !strings.Contains(cols, "\tembedding\t") {
-		t.Fatalf("expected embedding column in memory_entries, got %q", cols)
+	if !hasEmb {
+		t.Fatalf("expected embedding column in memory_entries")
 	}
 }
 
@@ -141,12 +157,10 @@ func TestSQLiteMemoryStoreEmbeddingCacheEviction(t *testing.T) {
 	if err := store.store("k2", "python content", "core", memoryMeta{}); err != nil {
 		t.Fatalf("store k2: %v", err)
 	}
-	out, err := store.execTabs("SELECT COUNT(*) FROM embedding_cache;")
-	if err != nil {
-		t.Fatalf("count embedding_cache: %v", err)
-	}
-	if strings.TrimSpace(out) != "1" {
-		t.Fatalf("expected cache size 1, got %q", out)
+	db := store.dbForHygiene()
+	cnt := queryScalar(db, "SELECT COUNT(*) FROM embedding_cache")
+	if cnt != "1" {
+		t.Fatalf("expected cache size 1, got %q", cnt)
 	}
 }
 
@@ -175,11 +189,9 @@ func TestSQLiteMemoryStoreRecallWithEmbedding(t *testing.T) {
 	if entries[0].Key != "k1" {
 		t.Fatalf("expected k1 first, got %#v", entries)
 	}
-	out, err := store.execTabs("SELECT COUNT(*) FROM embedding_cache;")
-	if err != nil {
-		t.Fatalf("count embedding_cache: %v", err)
-	}
-	if strings.TrimSpace(out) == "0" {
+	db := store.dbForHygiene()
+	cnt := queryScalar(db, "SELECT COUNT(*) FROM embedding_cache")
+	if cnt == "0" {
 		t.Fatalf("expected embedding cache to be populated")
 	}
 }
@@ -255,12 +267,10 @@ func TestSQLiteMemoryStoreRecallSpecialQueriesDoNotCrash(t *testing.T) {
 		}
 	}
 
-	out, err := store.execTabs("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_entries';")
-	if err != nil {
-		t.Fatalf("sqlite_master query: %v", err)
-	}
-	if strings.TrimSpace(out) != "1" {
-		t.Fatalf("memory_entries table should exist, got %q", out)
+	db := store.dbForHygiene()
+	cnt := queryScalar(db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_entries'")
+	if cnt != "1" {
+		t.Fatalf("memory_entries table should exist, got %q", cnt)
 	}
 }
 
@@ -319,13 +329,11 @@ func TestFTSContentModeTriggersExist(t *testing.T) {
 	if err := store.init(); err != nil {
 		t.Fatalf("init: %v", err)
 	}
+	db := store.dbForHygiene()
 	for _, name := range []string{"memory_entries_fts_ai", "memory_entries_fts_ad", "memory_entries_fts_au"} {
-		out, err := store.execTabs("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name='" + name + "';")
-		if err != nil {
-			t.Fatalf("check trigger %s: %v", name, err)
-		}
-		if strings.TrimSpace(out) != "1" {
-			t.Fatalf("trigger %s should exist, got %q", name, out)
+		cnt := queryScalar(db, "SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name=?", name)
+		if cnt != "1" {
+			t.Fatalf("trigger %s should exist, got %q", name, cnt)
 		}
 	}
 }
@@ -363,5 +371,28 @@ func TestEmbedBatchFakeEmbedder(t *testing.T) {
 	}
 	if vecs[1][0] != 0 || vecs[1][1] != 1 {
 		t.Fatalf("expected python=[0,1], got %v", vecs[1])
+	}
+}
+
+func TestInProcessSQLiteNoCLIDependency(t *testing.T) {
+	ws := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Agent.Workspace = ws
+	store := newSQLiteMemoryStore(cfg)
+	if err := store.init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if store.db == nil {
+		t.Fatalf("expected in-process *sql.DB connection, got nil")
+	}
+	if err := store.store("test", "in-process sqlite works", "core", memoryMeta{}); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	got, err := store.get("test")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got == nil || got.Content != "in-process sqlite works" {
+		t.Fatalf("expected content match, got %#v", got)
 	}
 }

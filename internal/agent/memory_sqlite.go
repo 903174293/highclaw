@@ -1,21 +1,20 @@
 package agent
 
 import (
-	"bytes"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/highclaw/highclaw/internal/config"
+	_ "modernc.org/sqlite"
 )
 
 type memoryEntry struct {
@@ -33,6 +32,7 @@ type memoryEntry struct {
 
 type sqliteMemoryStore struct {
 	dbPath             string
+	db                 *sql.DB
 	vectorWeight       float64
 	keywordWeight      float64
 	embeddingCacheSize int
@@ -40,6 +40,7 @@ type sqliteMemoryStore struct {
 	mu                 sync.Mutex
 }
 
+// newSQLiteMemoryStore 根据配置创建 SQLite 内存存储实例
 func newSQLiteMemoryStore(cfg *config.Config) *sqliteMemoryStore {
 	base := ""
 	if cfg != nil {
@@ -75,6 +76,21 @@ func (s *sqliteMemoryStore) location() string {
 	return s.dbPath
 }
 
+// openDB 打开或复用 database/sql 连接
+func (s *sqliteMemoryStore) openDB() (*sql.DB, error) {
+	if s.db != nil {
+		return s.db, nil
+	}
+	db, err := sql.Open("sqlite", s.dbPath+"?_pragma=busy_timeout%3d5000&_pragma=journal_mode%3dwal")
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite db: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	s.db = db
+	return db, nil
+}
+
+// init 初始化数据库表结构、索引和 FTS5 trigger
 func (s *sqliteMemoryStore) init() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -84,6 +100,11 @@ func (s *sqliteMemoryStore) init() error {
 		if err2 := os.MkdirAll(filepath.Dir(s.dbPath), 0o755); err2 != nil {
 			return fmt.Errorf("create memory state dir: %w", err)
 		}
+	}
+
+	db, err := s.openDB()
+	if err != nil {
+		return err
 	}
 
 	ddl := `
@@ -105,140 +126,174 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
   created_at TEXT NOT NULL,
   accessed_at TEXT NOT NULL
 );`
-	_, err := s.exec(ddl)
-	if err == nil {
-		_, _ = s.exec("ALTER TABLE memory_entries ADD COLUMN category TEXT NOT NULL DEFAULT 'core';")
-		_, _ = s.exec("ALTER TABLE memory_entries ADD COLUMN embedding BLOB;")
-		_, _ = s.exec("ALTER TABLE memory_entries ADD COLUMN created_at TEXT NOT NULL DEFAULT '';")
-		_, _ = s.exec("ALTER TABLE memory_entries ADD COLUMN session_key TEXT NOT NULL DEFAULT '';")
-		_, _ = s.exec("ALTER TABLE memory_entries ADD COLUMN channel TEXT NOT NULL DEFAULT '';")
-		_, _ = s.exec("ALTER TABLE memory_entries ADD COLUMN sender TEXT NOT NULL DEFAULT '';")
-		_, _ = s.exec("ALTER TABLE memory_entries ADD COLUMN message_id TEXT NOT NULL DEFAULT '';")
-		_, _ = s.exec("CREATE INDEX IF NOT EXISTS idx_memory_entries_updated_at ON memory_entries(updated_at DESC);")
-		_, _ = s.exec("CREATE INDEX IF NOT EXISTS idx_memory_entries_category ON memory_entries(category);")
-		_, _ = s.exec("CREATE INDEX IF NOT EXISTS idx_memory_entries_session_key ON memory_entries(session_key);")
-		_, _ = s.exec("CREATE INDEX IF NOT EXISTS idx_memory_entries_channel_sender ON memory_entries(channel, sender);")
-		_, _ = s.exec("CREATE INDEX IF NOT EXISTS idx_embedding_cache_accessed ON embedding_cache(accessed_at);")
-		_, _ = s.exec("UPDATE memory_entries SET created_at = updated_at WHERE created_at = '';")
-		s.ensureFTSContentMode()
+	_, err = db.Exec(ddl)
+	if err != nil {
+		return fmt.Errorf("create tables: %w", err)
 	}
-	return err
+
+	migrations := []string{
+		"ALTER TABLE memory_entries ADD COLUMN category TEXT NOT NULL DEFAULT 'core';",
+		"ALTER TABLE memory_entries ADD COLUMN embedding BLOB;",
+		"ALTER TABLE memory_entries ADD COLUMN created_at TEXT NOT NULL DEFAULT '';",
+		"ALTER TABLE memory_entries ADD COLUMN session_key TEXT NOT NULL DEFAULT '';",
+		"ALTER TABLE memory_entries ADD COLUMN channel TEXT NOT NULL DEFAULT '';",
+		"ALTER TABLE memory_entries ADD COLUMN sender TEXT NOT NULL DEFAULT '';",
+		"ALTER TABLE memory_entries ADD COLUMN message_id TEXT NOT NULL DEFAULT '';",
+	}
+	for _, m := range migrations {
+		_, _ = db.Exec(m)
+	}
+
+	indices := []string{
+		"CREATE INDEX IF NOT EXISTS idx_memory_entries_updated_at ON memory_entries(updated_at DESC);",
+		"CREATE INDEX IF NOT EXISTS idx_memory_entries_category ON memory_entries(category);",
+		"CREATE INDEX IF NOT EXISTS idx_memory_entries_session_key ON memory_entries(session_key);",
+		"CREATE INDEX IF NOT EXISTS idx_memory_entries_channel_sender ON memory_entries(channel, sender);",
+		"CREATE INDEX IF NOT EXISTS idx_embedding_cache_accessed ON embedding_cache(accessed_at);",
+	}
+	for _, idx := range indices {
+		_, _ = db.Exec(idx)
+	}
+	_, _ = db.Exec("UPDATE memory_entries SET created_at = updated_at WHERE created_at = '';")
+	s.ensureFTSContentMode(db)
+	return nil
 }
 
 // ensureFTSContentMode 将 FTS5 迁移为 content= 关联表模式并创建自动同步 trigger
-func (s *sqliteMemoryStore) ensureFTSContentMode() {
-	out, _ := s.execTabs("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name='memory_entries_fts_ai';")
-	if strings.TrimSpace(out) == "1" {
+func (s *sqliteMemoryStore) ensureFTSContentMode(db *sql.DB) {
+	var count int
+	_ = db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name='memory_entries_fts_ai'").Scan(&count)
+	if count == 1 {
 		return
 	}
-	_, _ = s.exec("DROP TABLE IF EXISTS memory_entries_fts;")
-	_, _ = s.exec("CREATE VIRTUAL TABLE memory_entries_fts USING fts5(key, content, content=memory_entries, content_rowid=rowid);")
-	_, _ = s.exec("INSERT INTO memory_entries_fts(memory_entries_fts) VALUES('rebuild');")
-	_, _ = s.exec("CREATE TRIGGER memory_entries_fts_ai AFTER INSERT ON memory_entries BEGIN INSERT INTO memory_entries_fts(rowid, key, content) VALUES (new.rowid, new.key, new.content); END;")
-	_, _ = s.exec("CREATE TRIGGER memory_entries_fts_ad AFTER DELETE ON memory_entries BEGIN INSERT INTO memory_entries_fts(memory_entries_fts, rowid, key, content) VALUES ('delete', old.rowid, old.key, old.content); END;")
-	_, _ = s.exec("CREATE TRIGGER memory_entries_fts_au AFTER UPDATE ON memory_entries BEGIN INSERT INTO memory_entries_fts(memory_entries_fts, rowid, key, content) VALUES ('delete', old.rowid, old.key, old.content); INSERT INTO memory_entries_fts(rowid, key, content) VALUES (new.rowid, new.key, new.content); END;")
+	db.Exec("DROP TABLE IF EXISTS memory_entries_fts;")
+	db.Exec("CREATE VIRTUAL TABLE memory_entries_fts USING fts5(key, content, content=memory_entries, content_rowid=rowid);")
+	db.Exec("INSERT INTO memory_entries_fts(memory_entries_fts) VALUES('rebuild');")
+	db.Exec("CREATE TRIGGER memory_entries_fts_ai AFTER INSERT ON memory_entries BEGIN INSERT INTO memory_entries_fts(rowid, key, content) VALUES (new.rowid, new.key, new.content); END;")
+	db.Exec("CREATE TRIGGER memory_entries_fts_ad AFTER DELETE ON memory_entries BEGIN INSERT INTO memory_entries_fts(memory_entries_fts, rowid, key, content) VALUES ('delete', old.rowid, old.key, old.content); END;")
+	db.Exec("CREATE TRIGGER memory_entries_fts_au AFTER UPDATE ON memory_entries BEGIN INSERT INTO memory_entries_fts(memory_entries_fts, rowid, key, content) VALUES ('delete', old.rowid, old.key, old.content); INSERT INTO memory_entries_fts(rowid, key, content) VALUES (new.rowid, new.key, new.content); END;")
 }
 
+// store 写入或更新一条记忆
 func (s *sqliteMemoryStore) store(key, content, category string, meta memoryMeta) error {
 	emb, _ := s.getOrComputeEmbedding(content)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	db, err := s.openDB()
+	if err != nil {
+		return err
+	}
 	category = strings.TrimSpace(category)
 	if category == "" {
 		category = "core"
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	sql := fmt.Sprintf(
-		"INSERT INTO memory_entries(key, content, category, embedding, created_at, session_key, channel, sender, message_id, updated_at) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "+
-			"ON CONFLICT(key) DO UPDATE SET content=excluded.content, category=excluded.category, embedding=excluded.embedding, session_key=excluded.session_key, channel=excluded.channel, sender=excluded.sender, message_id=excluded.message_id, updated_at=excluded.updated_at;",
-		sqlQuote(key), sqlQuote(content), sqlQuote(category),
-		sqlBlobOrNull(emb),
-		sqlQuote(now),
-		sqlQuote(strings.TrimSpace(meta.SessionKey)),
-		sqlQuote(strings.TrimSpace(meta.Channel)),
-		sqlQuote(strings.TrimSpace(meta.Sender)),
-		sqlQuote(strings.TrimSpace(meta.MessageID)),
-		sqlQuote(now),
+	_, err = db.Exec(
+		`INSERT INTO memory_entries(key, content, category, embedding, created_at, session_key, channel, sender, message_id, updated_at)
+		 VALUES(?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(key) DO UPDATE SET content=excluded.content, category=excluded.category, embedding=excluded.embedding,
+		   session_key=excluded.session_key, channel=excluded.channel, sender=excluded.sender, message_id=excluded.message_id, updated_at=excluded.updated_at`,
+		key, content, category, emb, now,
+		strings.TrimSpace(meta.SessionKey), strings.TrimSpace(meta.Channel),
+		strings.TrimSpace(meta.Sender), strings.TrimSpace(meta.MessageID), now,
 	)
-	_, err := s.exec(sql)
 	return err
 }
 
+// forget 删除指定 key 的记忆
 func (s *sqliteMemoryStore) forget(key string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out, err := s.execTabs(fmt.Sprintf("SELECT COUNT(*) FROM memory_entries WHERE key=%s;", sqlQuote(key)))
+	db, err := s.openDB()
 	if err != nil {
 		return false, err
 	}
-	existed := strings.TrimSpace(out) == "1"
-	_, err = s.exec(fmt.Sprintf("DELETE FROM memory_entries WHERE key=%s;", sqlQuote(key)))
+	var cnt int
+	_ = db.QueryRow("SELECT COUNT(*) FROM memory_entries WHERE key=?", key).Scan(&cnt)
+	existed := cnt == 1
+	_, err = db.Exec("DELETE FROM memory_entries WHERE key=?", key)
 	if err != nil {
 		return false, err
 	}
 	return existed, nil
 }
 
+// get 获取指定 key 的记忆条目
 func (s *sqliteMemoryStore) get(key string) (*memoryEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out, err := s.execTabs(fmt.Sprintf(
-		"SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries WHERE key=%s ORDER BY updated_at DESC LIMIT 1;",
-		sqlQuote(strings.TrimSpace(key)),
-	))
+	db, err := s.openDB()
 	if err != nil {
 		return nil, err
 	}
-	entries := parseMemoryEntries(out)
-	if len(entries) == 0 {
-		return nil, nil
+	row := db.QueryRow(
+		"SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries WHERE key=? LIMIT 1",
+		strings.TrimSpace(key),
+	)
+	var e memoryEntry
+	if err := row.Scan(&e.Key, &e.Content, &e.Category, &e.SessionKey, &e.Channel, &e.Sender, &e.MessageID, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
 	}
-	entry := entries[0]
-	return &entry, nil
+	return &e, nil
 }
 
+// list 列出指定分类（或全部）的记忆条目
 func (s *sqliteMemoryStore) list(category string) ([]memoryEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	category = strings.ToLower(strings.TrimSpace(category))
-	sql := "SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries ORDER BY updated_at DESC;"
-	if category != "" {
-		sql = fmt.Sprintf(
-			"SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries WHERE category=%s ORDER BY updated_at DESC;",
-			sqlQuote(category),
-		)
-	}
-	out, err := s.execTabs(sql)
+	db, err := s.openDB()
 	if err != nil {
 		return nil, err
 	}
-	return parseMemoryEntries(out), nil
+	category = strings.ToLower(strings.TrimSpace(category))
+	var rows *sql.Rows
+	if category != "" {
+		rows, err = db.Query(
+			"SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries WHERE category=? ORDER BY updated_at DESC",
+			category,
+		)
+	} else {
+		rows, err = db.Query("SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries ORDER BY updated_at DESC")
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMemoryEntries(rows)
 }
 
+// count 返回记忆总条数
 func (s *sqliteMemoryStore) count() (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out, err := s.execTabs("SELECT COUNT(*) FROM memory_entries;")
+	db, err := s.openDB()
 	if err != nil {
 		return 0, err
 	}
-	v, err := strconv.Atoi(strings.TrimSpace(out))
-	if err != nil {
-		return 0, nil
+	var cnt int
+	if err := db.QueryRow("SELECT COUNT(*) FROM memory_entries").Scan(&cnt); err != nil {
+		return 0, err
 	}
-	return v, nil
+	return cnt, nil
 }
 
+// healthCheck 检查数据库连接是否正常
 func (s *sqliteMemoryStore) healthCheck() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := s.execTabs("SELECT 1;"); err != nil {
+	db, err := s.openDB()
+	if err != nil {
 		return false
 	}
-	return true
+	var v int
+	return db.QueryRow("SELECT 1").Scan(&v) == nil
 }
 
+// recall 混合检索：FTS5 关键词 + 向量相似度
 func (s *sqliteMemoryStore) recall(query, key, sessionKey string, limit int) ([]memoryEntry, error) {
 	queryEmbedding, _ := s.getOrComputeEmbedding(strings.TrimSpace(query))
 
@@ -252,202 +307,157 @@ func (s *sqliteMemoryStore) recall(query, key, sessionKey string, limit int) ([]
 		return []memoryEntry{}, nil
 	}
 
-	var sql string
-	sessionFilter := strings.TrimSpace(sessionKey)
-	switch {
-	case strings.TrimSpace(key) != "":
-		if sessionFilter != "" {
-			sql = fmt.Sprintf(
-				"SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries WHERE key=%s AND session_key=%s ORDER BY updated_at DESC LIMIT %d;",
-				sqlQuote(key), sqlQuote(sessionFilter), limit,
-			)
-		} else {
-			sql = fmt.Sprintf(
-				"SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries WHERE key=%s ORDER BY updated_at DESC LIMIT %d;",
-				sqlQuote(key), limit,
-			)
-		}
-	case strings.TrimSpace(query) != "":
-		ftsExpr := ftsQuery(strings.TrimSpace(query))
-		if sessionFilter != "" {
-			sql = fmt.Sprintf(
-				"SELECT m.key, m.content, m.category, m.session_key, m.channel, m.sender, m.message_id, m.created_at, m.updated_at, bm25(memory_entries_fts) "+
-					"FROM memory_entries_fts JOIN memory_entries m ON m.rowid = memory_entries_fts.rowid "+
-					"WHERE memory_entries_fts MATCH %s AND m.session_key=%s ORDER BY bm25(memory_entries_fts) ASC, m.updated_at DESC LIMIT %d;",
-				sqlQuote(ftsExpr), sqlQuote(sessionFilter), limit,
-			)
-		} else {
-			sql = fmt.Sprintf(
-				"SELECT m.key, m.content, m.category, m.session_key, m.channel, m.sender, m.message_id, m.created_at, m.updated_at, bm25(memory_entries_fts) "+
-					"FROM memory_entries_fts JOIN memory_entries m ON m.rowid = memory_entries_fts.rowid "+
-					"WHERE memory_entries_fts MATCH %s ORDER BY bm25(memory_entries_fts) ASC, m.updated_at DESC LIMIT %d;",
-				sqlQuote(ftsExpr), limit,
-			)
-		}
-	default:
-		if sessionFilter != "" {
-			sql = fmt.Sprintf(
-				"SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries WHERE session_key=%s ORDER BY updated_at DESC LIMIT %d;",
-				sqlQuote(sessionFilter), limit,
-			)
-		} else {
-			sql = fmt.Sprintf(
-				"SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries ORDER BY updated_at DESC LIMIT %d;",
-				limit,
-			)
-		}
+	db, err := s.openDB()
+	if err != nil {
+		return nil, err
 	}
 
-	out, err := s.execTabs(sql)
-	if err != nil && strings.TrimSpace(query) != "" {
-		out, err = s.execTabs(buildLikeRecallSQL(query, sessionFilter, limit))
+	sessionFilter := strings.TrimSpace(sessionKey)
+	var keywordEntries []memoryEntry
+
+	switch {
+	case strings.TrimSpace(key) != "":
+		keywordEntries, err = s.recallByKey(db, key, sessionFilter, limit)
+	case strings.TrimSpace(query) != "":
+		keywordEntries, err = s.recallByFTS(db, query, sessionFilter, limit)
+		if err != nil {
+			keywordEntries, err = s.recallByLike(db, query, sessionFilter, limit)
+		}
+		if len(keywordEntries) == 0 {
+			if likeEntries, likeErr := s.recallByLike(db, query, sessionFilter, limit); likeErr == nil && len(likeEntries) > 0 {
+				keywordEntries = likeEntries
+			}
+		}
+	default:
+		keywordEntries, err = s.recallDefault(db, sessionFilter, limit)
 	}
 	if err != nil {
 		return nil, err
 	}
-	keywordEntries := parseMemoryEntries(out)
-	if len(keywordEntries) == 0 && strings.TrimSpace(query) != "" && strings.TrimSpace(key) == "" {
-		likeOut, likeErr := s.execTabs(buildLikeRecallSQL(query, sessionFilter, limit))
-		if likeErr == nil {
-			keywordEntries = parseMemoryEntries(likeOut)
-		}
-	}
-	keywordEntries = normalizeBM25Scores(keywordEntries)
-	if strings.TrimSpace(query) == "" {
-		return keywordEntries, nil
-	}
 
-	if len(queryEmbedding) == 0 {
+	keywordEntries = normalizeBM25Scores(keywordEntries)
+	if strings.TrimSpace(query) == "" || len(queryEmbedding) == 0 {
 		return keywordEntries, nil
 	}
-	vectorEntries, _ := s.vectorSearch(queryEmbedding, sessionFilter, limit*2)
+	vectorEntries, _ := s.vectorSearch(db, queryEmbedding, sessionFilter, limit*2)
 	if len(vectorEntries) == 0 {
 		return keywordEntries, nil
 	}
 	return s.hybridMerge(keywordEntries, vectorEntries, limit), nil
 }
 
-const sqlitePragmaPrefix = "PRAGMA trusted_schema = ON;\n"
-
-func (s *sqliteMemoryStore) exec(sql string) (string, error) {
-	cmd := exec.Command("sqlite3", s.dbPath, sqlitePragmaPrefix+sql)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return "", fmt.Errorf("sqlite exec failed: %s", msg)
-	}
-	return stdout.String(), nil
-}
-
-func (s *sqliteMemoryStore) execTabs(sql string) (string, error) {
-	cmd := exec.Command("sqlite3", "-tabs", "-noheader", s.dbPath, sqlitePragmaPrefix+sql)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return "", fmt.Errorf("sqlite query failed: %s", msg)
-	}
-	return stdout.String(), nil
-}
-
-func sqlQuote(v string) string {
-	return "'" + strings.ReplaceAll(v, "'", "''") + "'"
-}
-
-func sqlBlobOrNull(v []byte) string {
-	if len(v) == 0 {
-		return "NULL"
-	}
-	return "X'" + strings.ToUpper(hex.EncodeToString(v)) + "'"
-}
-
-func ftsQuery(query string) string {
-	words := strings.Fields(strings.TrimSpace(query))
-	if len(words) == 0 {
-		return `""`
-	}
-	out := make([]string, 0, len(words))
-	for _, w := range words {
-		w = strings.TrimSpace(w)
-		if w == "" {
-			continue
-		}
-		w = strings.ReplaceAll(w, `"`, `""`)
-		out = append(out, `"`+w+`"`)
-	}
-	if len(out) == 0 {
-		return `""`
-	}
-	return strings.Join(out, " OR ")
-}
-
-func buildLikeRecallSQL(query, sessionFilter string, limit int) string {
-	q := "%" + strings.TrimSpace(query) + "%"
+// recallByKey 按 key 精确匹配检索
+func (s *sqliteMemoryStore) recallByKey(db *sql.DB, key, sessionFilter string, limit int) ([]memoryEntry, error) {
+	var rows *sql.Rows
+	var err error
 	if sessionFilter != "" {
-		return fmt.Sprintf(
-			"SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries "+
-				"WHERE session_key=%s AND (key LIKE %s OR content LIKE %s) ORDER BY updated_at DESC LIMIT %d;",
-			sqlQuote(sessionFilter), sqlQuote(q), sqlQuote(q), limit,
-		)
+		rows, err = db.Query(
+			"SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries WHERE key=? AND session_key=? ORDER BY updated_at DESC LIMIT ?",
+			key, sessionFilter, limit)
+	} else {
+		rows, err = db.Query(
+			"SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries WHERE key=? ORDER BY updated_at DESC LIMIT ?",
+			key, limit)
 	}
-	return fmt.Sprintf(
-		"SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries "+
-			"WHERE key LIKE %s OR content LIKE %s ORDER BY updated_at DESC LIMIT %d;",
-		sqlQuote(q), sqlQuote(q), limit,
-	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMemoryEntries(rows)
 }
 
-func parseMemoryEntries(out string) []memoryEntry {
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	entries := make([]memoryEntry, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parts := strings.Split(line, "\t")
-		if len(parts) < 2 {
-			continue
-		}
-		entry := memoryEntry{Key: parts[0], Content: parts[1]}
-		if len(parts) >= 3 {
-			entry.Category = parts[2]
-		}
-		if len(parts) >= 4 {
-			entry.SessionKey = parts[3]
-		}
-		if len(parts) >= 5 {
-			entry.Channel = parts[4]
-		}
-		if len(parts) >= 6 {
-			entry.Sender = parts[5]
-		}
-		if len(parts) >= 7 {
-			entry.MessageID = parts[6]
-		}
-		if len(parts) >= 8 {
-			entry.CreatedAt = parts[7]
-		}
-		if len(parts) >= 9 {
-			entry.UpdatedAt = parts[8]
-		}
-		if len(parts) >= 10 {
-			if score, e := strconv.ParseFloat(parts[9], 64); e == nil {
-				entry.Score = math.Abs(score)
-			}
-		}
-		entries = append(entries, entry)
+// recallByFTS 通过 FTS5 全文检索
+func (s *sqliteMemoryStore) recallByFTS(db *sql.DB, query, sessionFilter string, limit int) ([]memoryEntry, error) {
+	ftsExpr := ftsQuery(strings.TrimSpace(query))
+	var rows *sql.Rows
+	var err error
+	if sessionFilter != "" {
+		rows, err = db.Query(
+			"SELECT m.key, m.content, m.category, m.session_key, m.channel, m.sender, m.message_id, m.created_at, m.updated_at, bm25(memory_entries_fts) "+
+				"FROM memory_entries_fts JOIN memory_entries m ON m.rowid = memory_entries_fts.rowid "+
+				"WHERE memory_entries_fts MATCH ? AND m.session_key=? ORDER BY bm25(memory_entries_fts) ASC, m.updated_at DESC LIMIT ?",
+			ftsExpr, sessionFilter, limit)
+	} else {
+		rows, err = db.Query(
+			"SELECT m.key, m.content, m.category, m.session_key, m.channel, m.sender, m.message_id, m.created_at, m.updated_at, bm25(memory_entries_fts) "+
+				"FROM memory_entries_fts JOIN memory_entries m ON m.rowid = memory_entries_fts.rowid "+
+				"WHERE memory_entries_fts MATCH ? ORDER BY bm25(memory_entries_fts) ASC, m.updated_at DESC LIMIT ?",
+			ftsExpr, limit)
 	}
-	return entries
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMemoryEntriesWithScore(rows)
+}
+
+// recallByLike 使用 LIKE 模糊匹配作为 FTS 的回退方案
+func (s *sqliteMemoryStore) recallByLike(db *sql.DB, query, sessionFilter string, limit int) ([]memoryEntry, error) {
+	q := "%" + strings.TrimSpace(query) + "%"
+	var rows *sql.Rows
+	var err error
+	if sessionFilter != "" {
+		rows, err = db.Query(
+			"SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries WHERE session_key=? AND (key LIKE ? OR content LIKE ?) ORDER BY updated_at DESC LIMIT ?",
+			sessionFilter, q, q, limit)
+	} else {
+		rows, err = db.Query(
+			"SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries WHERE key LIKE ? OR content LIKE ? ORDER BY updated_at DESC LIMIT ?",
+			q, q, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMemoryEntries(rows)
+}
+
+// recallDefault 无条件按时间排序检索
+func (s *sqliteMemoryStore) recallDefault(db *sql.DB, sessionFilter string, limit int) ([]memoryEntry, error) {
+	var rows *sql.Rows
+	var err error
+	if sessionFilter != "" {
+		rows, err = db.Query(
+			"SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries WHERE session_key=? ORDER BY updated_at DESC LIMIT ?",
+			sessionFilter, limit)
+	} else {
+		rows, err = db.Query(
+			"SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries ORDER BY updated_at DESC LIMIT ?",
+			limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMemoryEntries(rows)
+}
+
+// scanMemoryEntries 扫描标准 9 列结果集
+func scanMemoryEntries(rows *sql.Rows) ([]memoryEntry, error) {
+	var entries []memoryEntry
+	for rows.Next() {
+		var e memoryEntry
+		if err := rows.Scan(&e.Key, &e.Content, &e.Category, &e.SessionKey, &e.Channel, &e.Sender, &e.MessageID, &e.CreatedAt, &e.UpdatedAt); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
+// scanMemoryEntriesWithScore 扫描 9 列 + BM25 分数
+func scanMemoryEntriesWithScore(rows *sql.Rows) ([]memoryEntry, error) {
+	var entries []memoryEntry
+	for rows.Next() {
+		var e memoryEntry
+		var score float64
+		if err := rows.Scan(&e.Key, &e.Content, &e.Category, &e.SessionKey, &e.Channel, &e.Sender, &e.MessageID, &e.CreatedAt, &e.UpdatedAt, &score); err != nil {
+			return nil, err
+		}
+		e.Score = math.Abs(score)
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
 }
 
 // normalizeBM25Scores 将 BM25 原始绝对值归一化到 [0,1]，最高分映射为 1.0
@@ -468,6 +478,26 @@ func normalizeBM25Scores(entries []memoryEntry) []memoryEntry {
 		entries[i].Score = entries[i].Score / maxScore
 	}
 	return entries
+}
+
+func ftsQuery(query string) string {
+	words := strings.Fields(strings.TrimSpace(query))
+	if len(words) == 0 {
+		return `""`
+	}
+	out := make([]string, 0, len(words))
+	for _, w := range words {
+		w = strings.TrimSpace(w)
+		if w == "" {
+			continue
+		}
+		w = strings.ReplaceAll(w, `"`, `""`)
+		out = append(out, `"`+w+`"`)
+	}
+	if len(out) == 0 {
+		return `""`
+	}
+	return strings.Join(out, " OR ")
 }
 
 func cosineSimilarity(a, b []float32) float64 {
@@ -524,6 +554,7 @@ func (s *sqliteMemoryStore) contentHash(text string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// getOrComputeEmbedding 获取或计算文本的 embedding，带 LRU 缓存
 func (s *sqliteMemoryStore) getOrComputeEmbedding(text string) ([]byte, error) {
 	if s.embedder == nil || s.embedder.name() == "none" {
 		return nil, nil
@@ -532,17 +563,22 @@ func (s *sqliteMemoryStore) getOrComputeEmbedding(text string) ([]byte, error) {
 	if text == "" {
 		return nil, nil
 	}
-	hash := s.contentHash(text)
-	row, err := s.execTabs(fmt.Sprintf("SELECT hex(embedding) FROM embedding_cache WHERE content_hash=%s LIMIT 1;", sqlQuote(hash)))
-	if err == nil {
-		hexBlob := strings.TrimSpace(row)
-		if hexBlob != "" {
-			_, _ = s.exec(fmt.Sprintf("UPDATE embedding_cache SET accessed_at=%s WHERE content_hash=%s;", sqlQuote(time.Now().UTC().Format(time.RFC3339Nano)), sqlQuote(hash)))
-			if b, decErr := hex.DecodeString(hexBlob); decErr == nil {
-				return b, nil
-			}
-		}
+
+	s.mu.Lock()
+	db, err := s.openDB()
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
 	}
+	hash := s.contentHash(text)
+
+	var cachedBlob []byte
+	if err := db.QueryRow("SELECT embedding FROM embedding_cache WHERE content_hash=?", hash).Scan(&cachedBlob); err == nil && len(cachedBlob) > 0 {
+		db.Exec("UPDATE embedding_cache SET accessed_at=? WHERE content_hash=?", time.Now().UTC().Format(time.RFC3339Nano), hash)
+		s.mu.Unlock()
+		return cachedBlob, nil
+	}
+	s.mu.Unlock()
 
 	vec, err := s.embedder.embedOne(text)
 	if err != nil || len(vec) == 0 {
@@ -550,69 +586,48 @@ func (s *sqliteMemoryStore) getOrComputeEmbedding(text string) ([]byte, error) {
 	}
 	b := vecToBytes(vec)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, _ = s.exec(fmt.Sprintf(
-		"INSERT OR REPLACE INTO embedding_cache(content_hash, embedding, created_at, accessed_at) VALUES(%s, %s, %s, %s);",
-		sqlQuote(hash), sqlBlobOrNull(b), sqlQuote(now), sqlQuote(now),
-	))
+
+	s.mu.Lock()
+	db, _ = s.openDB()
+	db.Exec("INSERT OR REPLACE INTO embedding_cache(content_hash, embedding, created_at, accessed_at) VALUES(?,?,?,?)", hash, b, now, now)
 	if s.embeddingCacheSize > 0 {
-		_, _ = s.exec(fmt.Sprintf(
-			"DELETE FROM embedding_cache WHERE content_hash IN (SELECT content_hash FROM embedding_cache ORDER BY accessed_at ASC LIMIT MAX(0, (SELECT COUNT(*) FROM embedding_cache)-%d));",
-			s.embeddingCacheSize,
-		))
+		db.Exec("DELETE FROM embedding_cache WHERE content_hash IN (SELECT content_hash FROM embedding_cache ORDER BY accessed_at ASC LIMIT MAX(0, (SELECT COUNT(*) FROM embedding_cache)-?))", s.embeddingCacheSize)
 	}
+	s.mu.Unlock()
 	return b, nil
 }
 
-func (s *sqliteMemoryStore) vectorSearch(queryEmbedding []byte, sessionFilter string, limit int) ([]memoryEntry, error) {
+// vectorSearch 暴力向量搜索，计算 cosine similarity
+func (s *sqliteMemoryStore) vectorSearch(db *sql.DB, queryEmbedding []byte, sessionFilter string, limit int) ([]memoryEntry, error) {
 	if len(queryEmbedding) == 0 {
 		return nil, nil
 	}
-	var sql string
+	var rows *sql.Rows
+	var err error
 	if sessionFilter != "" {
-		sql = fmt.Sprintf("SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at, hex(embedding) FROM memory_entries WHERE embedding IS NOT NULL AND session_key=%s;", sqlQuote(sessionFilter))
+		rows, err = db.Query("SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at, embedding FROM memory_entries WHERE embedding IS NOT NULL AND session_key=?", sessionFilter)
 	} else {
-		sql = "SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at, hex(embedding) FROM memory_entries WHERE embedding IS NOT NULL;"
+		rows, err = db.Query("SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at, embedding FROM memory_entries WHERE embedding IS NOT NULL")
 	}
-	out, err := s.execTabs(sql)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
+
 	qv := bytesToVec(queryEmbedding)
-	scored := make([]memoryEntry, 0)
-	for _, row := range strings.Split(strings.TrimSpace(out), "\n") {
-		row = strings.TrimSpace(row)
-		if row == "" {
+	var scored []memoryEntry
+	for rows.Next() {
+		var e memoryEntry
+		var embBlob []byte
+		if err := rows.Scan(&e.Key, &e.Content, &e.Category, &e.SessionKey, &e.Channel, &e.Sender, &e.MessageID, &e.CreatedAt, &e.UpdatedAt, &embBlob); err != nil {
 			continue
 		}
-		parts := strings.Split(row, "\t")
-		if len(parts) < 10 {
-			continue
-		}
-		hexEmb := strings.TrimSpace(parts[9])
-		if hexEmb == "" {
-			continue
-		}
-		blob, decErr := hex.DecodeString(hexEmb)
-		if decErr != nil {
-			continue
-		}
-		score := cosineSimilarity(qv, bytesToVec(blob))
+		score := cosineSimilarity(qv, bytesToVec(embBlob))
 		if score <= 0 {
 			continue
 		}
-		entry := memoryEntry{
-			Key:        parts[0],
-			Content:    parts[1],
-			Category:   parts[2],
-			SessionKey: parts[3],
-			Channel:    parts[4],
-			Sender:     parts[5],
-			MessageID:  parts[6],
-			CreatedAt:  parts[7],
-			UpdatedAt:  parts[8],
-			Score:      score,
-		}
-		scored = append(scored, entry)
+		e.Score = score
+		scored = append(scored, e)
 	}
 	sort.Slice(scored, func(i, j int) bool {
 		if scored[i].Score == scored[j].Score {
@@ -629,6 +644,7 @@ func (s *sqliteMemoryStore) vectorSearch(queryEmbedding []byte, sessionFilter st
 	return scored, nil
 }
 
+// hybridMerge 合并关键词搜索和向量搜索结果
 func (s *sqliteMemoryStore) hybridMerge(keywordEntries, vectorEntries []memoryEntry, limit int) []memoryEntry {
 	type merged struct {
 		entry        memoryEntry
@@ -681,29 +697,28 @@ func (s *sqliteMemoryStore) reindex() (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, _ = s.exec("INSERT INTO memory_entries_fts(memory_entries_fts) VALUES('rebuild');")
-
-	out, err := s.execTabs("SELECT key, content FROM memory_entries WHERE embedding IS NULL OR length(embedding) = 0;")
+	db, err := s.openDB()
 	if err != nil {
 		return 0, err
 	}
-	if strings.TrimSpace(out) == "" {
-		return 0, nil
-	}
+	db.Exec("INSERT INTO memory_entries_fts(memory_entries_fts) VALUES('rebuild')")
 
+	rows, err := db.Query("SELECT key, content FROM memory_entries WHERE embedding IS NULL OR length(embedding) = 0")
+	if err != nil {
+		return 0, err
+	}
 	type kc struct{ key, content string }
 	var items []kc
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) < 2 {
+	for rows.Next() {
+		var k, c string
+		if err := rows.Scan(&k, &c); err != nil {
 			continue
 		}
-		key := strings.TrimSpace(parts[0])
-		content := strings.TrimSpace(parts[1])
-		if key != "" && content != "" {
-			items = append(items, kc{key, content})
+		if strings.TrimSpace(k) != "" && strings.TrimSpace(c) != "" {
+			items = append(items, kc{k, c})
 		}
 	}
+	rows.Close()
 	if len(items) == 0 {
 		return 0, nil
 	}
@@ -724,10 +739,7 @@ func (s *sqliteMemoryStore) reindex() (int, error) {
 				continue
 			}
 			b := vecToBytes(vec)
-			_, _ = s.exec(fmt.Sprintf(
-				"UPDATE memory_entries SET embedding=%s WHERE key=%s;",
-				sqlBlobOrNull(b), sqlQuote(items[i].key),
-			))
+			db.Exec("UPDATE memory_entries SET embedding=? WHERE key=?", b, items[i].key)
 			reEmbedded++
 		}
 	} else {
@@ -738,12 +750,17 @@ func (s *sqliteMemoryStore) reindex() (int, error) {
 			if embErr != nil || len(emb) == 0 {
 				continue
 			}
-			_, _ = s.exec(fmt.Sprintf(
-				"UPDATE memory_entries SET embedding=%s WHERE key=%s;",
-				sqlBlobOrNull(emb), sqlQuote(it.key),
-			))
+			db.Exec("UPDATE memory_entries SET embedding=? WHERE key=?", emb, it.key)
 			reEmbedded++
 		}
 	}
 	return reEmbedded, nil
+}
+
+// dbForHygiene 供 memory_hygiene 使用的内部连接获取方法
+func (s *sqliteMemoryStore) dbForHygiene() *sql.DB {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	db, _ := s.openDB()
+	return db
 }

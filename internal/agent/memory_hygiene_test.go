@@ -58,7 +58,8 @@ func TestPruneConversationRows(t *testing.T) {
 		t.Fatalf("store core old: %v", err)
 	}
 	oldTs := time.Now().AddDate(0, 0, -40).UTC().Format(time.RFC3339Nano)
-	if _, err := store.exec("UPDATE memory_entries SET updated_at = " + sqlQuote(oldTs) + " WHERE key IN ('conv_old','core_old');"); err != nil {
+	db := store.dbForHygiene()
+	if _, err := db.Exec("UPDATE memory_entries SET updated_at = ? WHERE key IN ('conv_old','core_old')", oldTs); err != nil {
 		t.Fatalf("set old timestamps: %v", err)
 	}
 
@@ -66,18 +67,26 @@ func TestPruneConversationRows(t *testing.T) {
 	if pruned != 1 {
 		t.Fatalf("expected pruned=1, got %d", pruned)
 	}
-	out, err := store.execTabs("SELECT key FROM memory_entries ORDER BY key;")
+	rows, err := db.Query("SELECT key FROM memory_entries ORDER BY key")
 	if err != nil {
 		t.Fatalf("query keys: %v", err)
 	}
-	if out == "" {
+	defer rows.Close()
+	var keys []string
+	for rows.Next() {
+		var k string
+		rows.Scan(&k)
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
 		t.Fatalf("expected remaining rows")
 	}
-	if containsLine(out, "conv_old") {
+	keySet := strings.Join(keys, ",")
+	if strings.Contains(keySet, "conv_old") {
 		t.Fatalf("conv_old should be pruned")
 	}
-	if !containsLine(out, "conv_new") || !containsLine(out, "core_old") {
-		t.Fatalf("expected conv_new and core_old to remain, got %q", out)
+	if !strings.Contains(keySet, "conv_new") || !strings.Contains(keySet, "core_old") {
+		t.Fatalf("expected conv_new and core_old to remain, got %v", keys)
 	}
 }
 

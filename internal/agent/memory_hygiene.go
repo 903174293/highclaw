@@ -1,17 +1,17 @@
 package agent
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/highclaw/highclaw/internal/config"
+	_ "modernc.org/sqlite"
 )
 
 const (
@@ -225,35 +225,30 @@ func purgeSessionArchives(workspace string, days int) uint64 {
 	return removed
 }
 
+// pruneConversationRows 使用 in-process SQLite 清理过期对话记忆
 func pruneConversationRows(workspace string, days int) uint64 {
 	if days <= 0 {
 		return 0
 	}
-	db := filepath.Join(workspace, "memory", "brain.db")
-	if _, err := os.Stat(db); err != nil {
+	dbPath := filepath.Join(workspace, "memory", "brain.db")
+	if _, err := os.Stat(dbPath); err != nil {
 		return 0
 	}
 	cutoff := time.Now().AddDate(0, 0, -days).UTC().Format(time.RFC3339Nano)
-	sql := fmt.Sprintf("PRAGMA trusted_schema = ON; DELETE FROM memory_entries WHERE category='conversation' AND updated_at < %s; SELECT changes();", sqlQuote(cutoff))
-	cmd := exec.Command("sqlite3", "-noheader", db, sql)
-	out, err := cmd.Output()
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return 0
 	}
-	n := strings.TrimSpace(string(out))
-	if n == "" {
-		return 0
-	}
-	lines := strings.Split(n, "\n")
-	last := strings.TrimSpace(lines[len(lines)-1])
-	if last == "" {
-		return 0
-	}
-	v, err := strconv.ParseUint(last, 10, 64)
+	defer db.Close()
+	result, err := db.Exec("DELETE FROM memory_entries WHERE category='conversation' AND updated_at < ?", cutoff)
 	if err != nil {
 		return 0
 	}
-	return v
+	affected, err := result.RowsAffected()
+	if err != nil || affected < 0 {
+		return 0
+	}
+	return uint64(affected)
 }
 
 func uniqueArchiveTarget(dir, filename string) string {
