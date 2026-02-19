@@ -31,6 +31,34 @@ type Config struct {
 	Secrets       SecretsConfig       `json:"secrets"`
 	Identity      IdentityConfig      `json:"identity"`
 	Observability ObservabilityConfig `json:"observability"`
+	Log           LogConfig           `json:"log"`
+	TaskLog       TaskLogConfig       `json:"taskLog"`
+}
+
+// LogConfig 文件日志管理配置
+type LogConfig struct {
+	// Dir 日志文件目录，默认 ~/.highclaw/logs
+	Dir string `json:"dir"`
+	// Level 日志级别: "debug" | "info" | "warn" | "error"
+	Level string `json:"level"`
+	// MaxAgeDays 日志文件保留天数，默认 30
+	MaxAgeDays int `json:"maxAgeDays"`
+	// MaxSizeMB 单文件最大尺寸（MB），默认 50
+	MaxSizeMB int `json:"maxSizeMB"`
+	// StderrEnabled 是否同时输出到 stderr，默认 true
+	StderrEnabled *bool `json:"stderrEnabled,omitempty"`
+}
+
+// TaskLogConfig 任务审计日志配置
+type TaskLogConfig struct {
+	// Enabled 是否启用任务日志，默认 true
+	Enabled *bool `json:"enabled,omitempty"`
+	// Dir 数据库目录，默认 ~/.highclaw/state
+	Dir string `json:"dir"`
+	// MaxAgeDays 记录保留天数，默认 90
+	MaxAgeDays int `json:"maxAgeDays"`
+	// MaxRecords 最大记录数，默认 100000
+	MaxRecords int `json:"maxRecords"`
 }
 
 // SessionConfig 控制会话路由策略
@@ -469,6 +497,15 @@ func Default() *Config {
 		},
 		Secrets: SecretsConfig{
 			Encrypt: true,
+		},
+		Log: LogConfig{
+			Level:      "info",
+			MaxAgeDays: 30,
+			MaxSizeMB:  50,
+		},
+		TaskLog: TaskLogConfig{
+			MaxAgeDays: 90,
+			MaxRecords: 100000,
 		},
 		Web: WebConfig{
 			Auth: WebAuthConfig{

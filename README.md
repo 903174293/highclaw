@@ -458,8 +458,11 @@ highclaw memory search "deployment strategy"
 # Inspect a specific entry
 highclaw memory get user_msg_abc123
 
-# List all entries, filtered by category
+# Paginated list with filters (SQLite backend)
 highclaw memory list --category conversation --limit 10
+highclaw memory list --since 2025-01-01T00:00:00Z --until 2025-02-01T00:00:00Z
+highclaw memory list --sort -created_at --search "important"
+highclaw memory list --limit 20 --offset 40   # Page 3
 
 # Check memory health
 highclaw memory status
@@ -830,10 +833,15 @@ Supported channels: **Telegram, Discord, Slack, WhatsApp, Feishu/Lark, WeCom, We
 | Command | Description |
 |---------|-------------|
 | `highclaw memory status` | Show memory backend status (SQLite, entry count, index health) |
-| `highclaw memory list` | List all memory entries |
+| `highclaw memory list` | List memory entries with pagination (default 50/page) |
+| `highclaw memory list --limit 20 --offset 40` | Paginated browsing |
+| `highclaw memory list --category core` | Filter by category |
+| `highclaw memory list --since 2025-01-01T00:00:00Z` | Filter by date range (RFC3339) |
+| `highclaw memory list --sort -created_at` | Custom sort (- desc, + asc) |
+| `highclaw memory list --search "keyword"` | Full-text search within list (FTS5, SQLite only) |
 | `highclaw memory get <key>` | Retrieve a specific memory entry by key |
-| `highclaw memory search <query>` | Search memory for relevant context (semantic + keyword) |
-| `highclaw memory sync` | Sync memory from session files |
+| `highclaw memory search <query>` | Semantic + keyword hybrid search (recommended) |
+| `highclaw memory sync` | Rebuild FTS5 index and batch re-embed missing vectors |
 | `highclaw memory reset` | Reset the memory index |
 
 ### Skills
@@ -860,8 +868,12 @@ Supported channels: **Telegram, Discord, Slack, WhatsApp, Feishu/Lark, WeCom, We
 | `highclaw status` | Comprehensive status: gateway, sessions, channels, daemon, agent, models |
 | `highclaw doctor` | Full diagnostics: config, auth, gateway, sandbox, security, workspace |
 | `highclaw dns` | DNS diagnostics and configuration checks |
-| `highclaw logs tail` | Stream live gateway logs |
-| `highclaw logs query <pattern>` | Search historical logs |
+| `highclaw logs tail` | Stream live gateway logs (auto-selects latest rotated file) |
+| `highclaw logs tail -f` | Follow live log output in real-time |
+| `highclaw logs query <pattern>` | Search across all log files |
+| `highclaw logs list` | List all log files with sizes |
+| `highclaw logs status` | Show log system status (directory, file count, total size) |
+| `highclaw logs clean` | Clean up expired log files |
 
 ### Security & Approvals
 
@@ -920,6 +932,32 @@ Supported channels: **Telegram, Discord, Slack, WhatsApp, Feishu/Lark, WeCom, We
 |---------|-------------|
 | `highclaw migrate openclaw` | Migrate config/workspace from `~/.openclaw` to `~/.highclaw` |
 | `highclaw migrate openclaw --dry-run` | Preview migration without writing (safe) |
+
+### Task Audit Log
+
+| Command | Description |
+|---------|-------------|
+| `highclaw tasks list` | List recent task records (default 20/page, newest first) |
+| `highclaw tasks list --action chat --status success` | Filter by action type and status |
+| `highclaw tasks list --since 2025-01-01T00:00:00Z --until 2025-02-01T00:00:00Z` | Filter by date range (RFC3339) |
+| `highclaw tasks list --sort -duration_ms` | Custom sort (- desc, + asc): created_at, duration_ms, tokens_input, tokens_output, action, module |
+| `highclaw tasks get <id>` | Get task record details (JSON) |
+| `highclaw tasks search <query>` | Full-text search across request/response/error fields (FTS5) |
+| `highclaw tasks stats` | Show statistics: totals, token usage, avg duration, breakdowns by action/module/status |
+| `highclaw tasks count` | Show total record count |
+| `highclaw tasks clean` | Clean up old records (default: 90 days, max 100K) |
+
+### Logs (Enhanced)
+
+| Command | Description |
+|---------|-------------|
+| `highclaw logs tail` | Show recent log lines from the latest rotated file |
+| `highclaw logs tail -f` | Follow live log output in real-time |
+| `highclaw logs tail -n 500` | Show last 500 lines |
+| `highclaw logs query <pattern>` | Search across all log files (case-insensitive) |
+| `highclaw logs list` | List all log files with sizes and timestamps |
+| `highclaw logs status` | Show log system status (directory, file count, total size, config) |
+| `highclaw logs clean` | Remove expired log files based on maxAgeDays config |
 
 ### System Lifecycle
 

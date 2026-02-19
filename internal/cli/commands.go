@@ -24,21 +24,25 @@ import (
 
 	"github.com/highclaw/highclaw/internal/agent"
 	"github.com/highclaw/highclaw/internal/config"
-	userSkills "github.com/highclaw/highclaw/internal/skills"
 	"github.com/highclaw/highclaw/internal/domain/model"
 	"github.com/highclaw/highclaw/internal/gateway/protocol"
 	"github.com/highclaw/highclaw/internal/gateway/session"
+	userSkills "github.com/highclaw/highclaw/internal/skills"
+	"github.com/highclaw/highclaw/internal/system/tasklog"
 	"github.com/highclaw/highclaw/internal/tui"
 	"github.com/spf13/cobra"
 )
 
+// taskStore 全局任务日志存储，由 gateway/agent 命令初始化
+var taskStore *tasklog.Store
+
 var (
-	agentMessage     string
-	agentProvider    string
-	agentModel          string
-	agentTemperature    float64
-	agentSession        string
-	agentLast           bool // 接续上次会话
+	agentMessage         string
+	agentProvider        string
+	agentModel           string
+	agentTemperature     float64
+	agentSession         string
+	agentLast            bool // 接续上次会话
 	agentNoWorkspaceOnly bool // 临时允许访问绝对路径
 
 	cronTaskID      string
@@ -62,7 +66,12 @@ var (
 	tuiModel   string
 
 	memoryLimit    int
+	memoryOffset   int
 	memoryCategory string
+	memorySince    string
+	memoryUntil    string
+	memorySort     string
+	memorySearch   string
 )
 
 // --- Agent Command ---
@@ -105,6 +114,11 @@ var agentChatCmd = &cobra.Command{
 
 		runner := agent.NewRunner(cfg, logger)
 
+		// 初始化任务日志（CLI 模式下如果 gateway 未启动，这里初始化）
+		if taskStore == nil {
+			taskStore = initTaskLog(cfg)
+		}
+
 		msg := strings.TrimSpace(strings.Join(args, " "))
 		if msg == "" {
 			return fmt.Errorf("message cannot be empty")
@@ -141,6 +155,7 @@ var agentChatCmd = &cobra.Command{
 		}
 		history = append(history, agent.ChatMessage{Role: "user", Content: msg})
 
+		chatStart := time.Now()
 		result, err := runner.Run(context.Background(), &agent.RunRequest{
 			SessionKey:  sessionKey,
 			Channel:     "cli",
@@ -150,17 +165,24 @@ var agentChatCmd = &cobra.Command{
 			Model:       strings.TrimSpace(agentModel),
 			Temperature: agentTemperature,
 		})
-		if err != nil {
-			return err
-		}
+		chatDuration := time.Since(chatStart)
 		modelName := strings.TrimSpace(agentModel)
 		if modelName == "" {
 			modelName = cfg.Agent.Model
+		}
+		if err != nil {
+			logTask(tasklog.ActionChat, "agent", sessionKey, "cli", "user", msg, err.Error(), "error", chatDuration, 0, 0, modelName)
+			return err
 		}
 
 		// 保存完整历史（包含新轮次）
 		history = append(history, agent.ChatMessage{Role: "assistant", Content: result.Reply})
 		_ = saveCLISessionFull(sessionKey, "cli", modelName, history)
+
+		// 记录成功的聊天任务
+		logTask(tasklog.ActionChat, "agent", sessionKey, "cli", "user", msg,
+			truncateString(result.Reply, 500), "success", chatDuration,
+			result.TokensUsed.InputTokens, result.TokensUsed.OutputTokens, modelName)
 
 		fmt.Println(result.Reply)
 		return nil
@@ -1318,20 +1340,20 @@ var logsCmd = &cobra.Command{
 
 var logsTailCmd = &cobra.Command{
 	Use:   "tail",
-	Short: "Stream live logs",
+	Short: "Stream live logs (supports log rotation directory)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return tailLogFile(logFilePath(), logTailLines, logTailFollow)
+		return enhancedLogsTail(logTailLines, logTailFollow)
 	},
 }
 
 var logsQueryCmd = &cobra.Command{
 	Use:   "query [pattern]",
-	Short: "Search historical logs",
+	Short: "Search across all log files",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
 			return fmt.Errorf("pattern is required")
 		}
-		return queryLogFile(logFilePath(), strings.Join(args, " "))
+		return enhancedLogsQuery(strings.Join(args, " "))
 	},
 }
 
@@ -1432,22 +1454,50 @@ var memoryGetCmd = &cobra.Command{
 
 var memoryListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List memory entries",
+	Short: "List memory entries (paged)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {
 			return fmt.Errorf("load config: %w", err)
 		}
-		entries, err := listMemoryBackend(cfg, memoryCategory, memoryLimit)
+		sortDesc := true
+		sortBy := "updated_at"
+		if memorySort != "" {
+			if strings.HasPrefix(memorySort, "+") {
+				sortDesc = false
+				sortBy = strings.TrimPrefix(memorySort, "+")
+			} else if strings.HasPrefix(memorySort, "-") {
+				sortBy = strings.TrimPrefix(memorySort, "-")
+			} else {
+				sortBy = memorySort
+			}
+		}
+		result, err := agent.ListMemoryPaged(cfg, agent.MemoryListParams{
+			Category: memoryCategory,
+			Limit:    memoryLimit,
+			Offset:   memoryOffset,
+			Since:    memorySince,
+			Until:    memoryUntil,
+			SortBy:   sortBy,
+			SortDesc: sortDesc,
+			Search:   memorySearch,
+		})
 		if err != nil {
 			return err
 		}
-		if len(entries) == 0 {
+		if len(result.Entries) == 0 {
 			fmt.Println("no memory entries")
 			return nil
 		}
-		for _, e := range entries {
-			fmt.Printf("[%s] %s: %s\n", e.Category, e.Key, e.Content)
+		fmt.Printf("Memory entries (%d/%d):\n\n", len(result.Entries), result.Total)
+		for _, e := range result.Entries {
+			fmt.Printf("  [%s] %s: %s\n", e.Category, e.Key, truncateString(e.Content, 80))
+			if e.UpdatedAt != "" {
+				fmt.Printf("         updated: %s\n", e.UpdatedAt)
+			}
+		}
+		if result.Total > memoryOffset+memoryLimit {
+			fmt.Printf("\n  ... %d more. Use --offset %d to see next page.\n", result.Total-memoryOffset-memoryLimit, memoryOffset+memoryLimit)
 		}
 		return nil
 	},
@@ -1978,7 +2028,12 @@ func init() {
 	memorySearchCmd.Flags().IntVar(&memoryLimit, "limit", 20, "Max results to return")
 	memorySearchCmd.Flags().StringVar(&memoryCategory, "category", "", "Filter by category")
 	memoryListCmd.Flags().IntVar(&memoryLimit, "limit", 50, "Max results to return")
+	memoryListCmd.Flags().IntVar(&memoryOffset, "offset", 0, "Offset for pagination")
 	memoryListCmd.Flags().StringVar(&memoryCategory, "category", "", "Filter by category")
+	memoryListCmd.Flags().StringVar(&memorySince, "since", "", "Filter entries updated after this time (RFC3339, e.g. 2025-01-01T00:00:00Z)")
+	memoryListCmd.Flags().StringVar(&memoryUntil, "until", "", "Filter entries updated before this time (RFC3339)")
+	memoryListCmd.Flags().StringVar(&memorySort, "sort", "-updated_at", "Sort field with direction prefix: -updated_at, +key, -created_at")
+	memoryListCmd.Flags().StringVar(&memorySearch, "search", "", "Full-text search keywords (FTS5, sqlite backend only)")
 	memoryCmd.AddCommand(memorySearchCmd)
 	memoryCmd.AddCommand(memoryGetCmd)
 	memoryCmd.AddCommand(memoryListCmd)
@@ -2736,4 +2791,25 @@ func memoryBackendLocation(cfg *config.Config) string {
 
 func memoryHealthBackend(cfg *config.Config) bool {
 	return agent.MemoryHealth(cfg)
+}
+
+// logTask 记录任务日志（安全调用，taskStore 为 nil 时静默跳过）
+func logTask(action, module, sessionKey, channel, sender, request, response, status string, duration time.Duration, tokensIn, tokensOut int, model string) {
+	if taskStore == nil {
+		return
+	}
+	_ = taskStore.Log(&tasklog.TaskRecord{
+		Action:       action,
+		Module:       module,
+		SessionKey:   sessionKey,
+		Channel:      channel,
+		Sender:       sender,
+		RequestBody:  request,
+		ResponseBody: response,
+		Status:       status,
+		DurationMs:   duration.Milliseconds(),
+		TokensInput:  tokensIn,
+		TokensOutput: tokensOut,
+		Model:        model,
+	})
 }

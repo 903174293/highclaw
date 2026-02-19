@@ -92,20 +92,76 @@ func GetMemory(cfg *config.Config, key string) (*MemoryEntryDTO, error) {
 	return &dto, nil
 }
 
-// ListMemory 列出记忆条目
+// MemoryListParams 外部使用的记忆列表查询参数
+type MemoryListParams struct {
+	Category string // 按分类过滤
+	Limit    int    // 分页大小，默认 50
+	Offset   int    // 偏移量
+	Since    string // 起始时间（RFC3339）
+	Until    string // 截止时间（RFC3339）
+	SortBy   string // 排序字段: "updated_at" | "created_at" | "key"
+	SortDesc bool   // 是否降序，默认 true
+	Search   string // 全文搜索关键词
+}
+
+// MemoryListResult 包含查询结果和总数
+type MemoryListResult struct {
+	Entries []MemoryEntryDTO
+	Total   int
+}
+
+// ListMemory 列出记忆条目（兼容旧接口）
 func ListMemory(cfg *config.Config, category string, limit int) ([]MemoryEntryDTO, error) {
+	result, err := ListMemoryPaged(cfg, MemoryListParams{Category: category, Limit: limit, SortDesc: true})
+	if err != nil {
+		return nil, err
+	}
+	return result.Entries, nil
+}
+
+// ListMemoryPaged 分页查询记忆条目，返回结果和总数
+func ListMemoryPaged(cfg *config.Config, p MemoryListParams) (*MemoryListResult, error) {
 	ms := resolveMemoryStore(cfg)
 	if err := ms.init(); err != nil {
 		return nil, err
 	}
-	entries, err := ms.list(category)
+	if p.Limit <= 0 {
+		p.Limit = 50
+	}
+
+	// SQLite 后端使用 SQL 级分页
+	if sq, ok := ms.(*sqliteMemoryStore); ok {
+		entries, total, err := sq.listPaged(memoryListParams{
+			Category: p.Category,
+			Limit:    p.Limit,
+			Offset:   p.Offset,
+			Since:    p.Since,
+			Until:    p.Until,
+			SortBy:   p.SortBy,
+			SortDesc: p.SortDesc,
+			Search:   p.Search,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &MemoryListResult{Entries: toDTOs(entries), Total: total}, nil
+	}
+
+	// Markdown 后端回退：应用层截断
+	entries, err := ms.list(p.Category)
 	if err != nil {
 		return nil, err
 	}
-	if limit > 0 && len(entries) > limit {
-		entries = entries[:limit]
+	total := len(entries)
+	start := p.Offset
+	if start > len(entries) {
+		start = len(entries)
 	}
-	return toDTOs(entries), nil
+	end := start + p.Limit
+	if end > len(entries) {
+		end = len(entries)
+	}
+	return &MemoryListResult{Entries: toDTOs(entries[start:end]), Total: total}, nil
 }
 
 // CountMemory 返回记忆条目总数

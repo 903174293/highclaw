@@ -241,29 +241,91 @@ func (s *sqliteMemoryStore) get(key string) (*memoryEntry, error) {
 	return &e, nil
 }
 
-// list 列出指定分类（或全部）的记忆条目
+// list 列出指定分类（或全部）的记忆条目（兼容接口，默认限制 1000 条防止 OOM）
 func (s *sqliteMemoryStore) list(category string) ([]memoryEntry, error) {
+	result, _, err := s.listPaged(memoryListParams{Category: category, Limit: 1000})
+	return result, err
+}
+
+// memoryListParams 分页查询参数
+type memoryListParams struct {
+	Category string // 按分类过滤
+	Limit    int    // 分页大小，默认 50
+	Offset   int    // 偏移量
+	Since    string // 起始时间（RFC3339），含
+	Until    string // 截止时间（RFC3339），含
+	SortBy   string // 排序字段: "updated_at"(默认) | "created_at" | "key"
+	SortDesc bool   // 是否降序，默认 true
+	Search   string // 全文搜索关键词（FTS5）
+}
+
+// listPaged SQL 级分页查询，返回 (entries, totalCount, error)
+func (s *sqliteMemoryStore) listPaged(p memoryListParams) ([]memoryEntry, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	db, err := s.openDB()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	category = strings.ToLower(strings.TrimSpace(category))
-	var rows *sql.Rows
+
+	if p.Limit <= 0 {
+		p.Limit = 50
+	}
+
+	var conditions []string
+	var args []any
+
+	category := strings.ToLower(strings.TrimSpace(p.Category))
 	if category != "" {
-		rows, err = db.Query(
-			"SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries WHERE category=? ORDER BY updated_at DESC",
-			category,
-		)
-	} else {
-		rows, err = db.Query("SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries ORDER BY updated_at DESC")
+		conditions = append(conditions, "category=?")
+		args = append(args, category)
 	}
+	if p.Since != "" {
+		conditions = append(conditions, "updated_at>=?")
+		args = append(args, p.Since)
+	}
+	if p.Until != "" {
+		conditions = append(conditions, "updated_at<=?")
+		args = append(args, p.Until)
+	}
+	if p.Search != "" {
+		ftsExpr := ftsQuery(strings.TrimSpace(p.Search))
+		conditions = append(conditions, "rowid IN (SELECT rowid FROM memory_entries_fts WHERE memory_entries_fts MATCH ?)")
+		args = append(args, ftsExpr)
+	}
+
+	where := ""
+	if len(conditions) > 0 {
+		where = " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	// 统计总数
+	var total int
+	countArgs := make([]any, len(args))
+	copy(countArgs, args)
+	_ = db.QueryRow("SELECT COUNT(*) FROM memory_entries"+where, countArgs...).Scan(&total)
+
+	// 排序
+	sortCol := "updated_at"
+	if p.SortBy == "created_at" || p.SortBy == "key" {
+		sortCol = p.SortBy
+	}
+	sortDir := "DESC"
+	if !p.SortDesc && p.SortBy != "" {
+		sortDir = "ASC"
+	}
+
+	query := "SELECT key, content, category, session_key, channel, sender, message_id, created_at, updated_at FROM memory_entries" +
+		where + " ORDER BY " + sortCol + " " + sortDir + " LIMIT ? OFFSET ?"
+	args = append(args, p.Limit, p.Offset)
+
+	rows, err := db.Query(query, args...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
-	return scanMemoryEntries(rows)
+	entries, err := scanMemoryEntries(rows)
+	return entries, total, err
 }
 
 // count 返回记忆总条数

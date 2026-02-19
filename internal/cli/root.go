@@ -62,6 +62,7 @@ func init() {
 	rootCmd.AddCommand(securityCmd)
 	rootCmd.AddCommand(hooksCmd)
 	rootCmd.AddCommand(logsCmd)
+	rootCmd.AddCommand(tasksCmd)
 	rootCmd.AddCommand(browserCmdGroup)
 	rootCmd.AddCommand(memoryCmd)
 	rootCmd.AddCommand(daemonCmd)
