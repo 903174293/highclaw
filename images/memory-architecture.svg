@@ -1,0 +1,171 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 820" font-family="'Segoe UI', system-ui, -apple-system, sans-serif">
+  <defs>
+    <filter id="shadow" x="-4%" y="-4%" width="108%" height="108%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.2"/>
+    </filter>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#080d14"/>
+      <stop offset="100%" stop-color="#0f1520"/>
+    </linearGradient>
+    <linearGradient id="memGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f0a2e"/>
+      <stop offset="100%" stop-color="#150e36"/>
+    </linearGradient>
+    <linearGradient id="sqliteGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a1a2a"/>
+      <stop offset="100%" stop-color="#0e2236"/>
+    </linearGradient>
+    <linearGradient id="perfGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#0a2e0f"/>
+      <stop offset="100%" stop-color="#0e3615"/>
+    </linearGradient>
+    <marker id="arrowViolet" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#8b5cf6"/></marker>
+    <marker id="arrowCyan" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#00e5ff"/></marker>
+    <marker id="arrowAmber" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#f59e0b"/></marker>
+    <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#22c55e"/></marker>
+    <filter id="glowViolet" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowCyan" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1100" height="820" rx="12" fill="url(#bgGrad)"/>
+  <g stroke="#0e2a3a" stroke-width="0.3" opacity="0.3">
+    <line x1="0" y1="200" x2="1100" y2="200"/><line x1="0" y1="400" x2="1100" y2="400"/>
+    <line x1="0" y1="600" x2="1100" y2="600"/>
+    <line x1="200" y1="0" x2="200" y2="820"/><line x1="400" y1="0" x2="400" y2="820"/>
+    <line x1="600" y1="0" x2="600" y2="820"/><line x1="800" y1="0" x2="800" y2="820"/>
+  </g>
+
+  <text x="550" y="38" text-anchor="middle" fill="#c4b5fd" font-size="22" font-weight="700" filter="url(#glowViolet)">HighClaw Memory Architecture</text>
+  <text x="550" y="58" text-anchor="middle" fill="#5a7a8a" font-size="12">Full-Stack Search Engine · Zero External Dependencies · Pure Go · modernc.org/sqlite In-Process</text>
+
+  <!-- Agent Loop -->
+  <rect x="300" y="75" width="500" height="55" rx="10" fill="#0a1520" stroke="#00e5ff" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="550" y="100" text-anchor="middle" fill="#00e5ff" font-size="14" font-weight="700" filter="url(#glowCyan)">Agent Loop</text>
+  <text x="550" y="118" text-anchor="middle" fill="#5a7a8a" font-size="10">Message In &#x2192; Memory Recall &#x2192; LLM &#x2192; Tools &#x2192; Memory Save &#x2192; Response Out</text>
+
+  <line x1="430" y1="130" x2="430" y2="155" stroke="#8b5cf6" stroke-width="2" marker-end="url(#arrowViolet)"/>
+  <text x="440" y="148" fill="#a78bfa" font-size="8">recall</text>
+  <line x1="670" y1="130" x2="670" y2="155" stroke="#8b5cf6" stroke-width="2" marker-end="url(#arrowViolet)"/>
+  <text x="680" y="148" fill="#a78bfa" font-size="8">store</text>
+
+  <!-- Memory Engine -->
+  <rect x="20" y="160" width="1060" height="440" rx="12" fill="url(#memGrad)" stroke="#8b5cf6" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="550" y="185" text-anchor="middle" fill="#e9d5ff" font-size="15" font-weight="700">Memory Engine &#x2014; brain.db (Single SQLite File)</text>
+
+  <!-- FTS5 -->
+  <rect x="40" y="200" width="320" height="85" rx="8" fill="#120e2e" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="200" y="220" text-anchor="middle" fill="#c4b5fd" font-size="12" font-weight="600">FTS5 Full-Text Search</text>
+  <text x="200" y="238" text-anchor="middle" fill="#a78bfa" font-size="9">BM25 scoring + score normalization [0,1]</text>
+  <text x="200" y="254" text-anchor="middle" fill="#a78bfa" font-size="9">content= mode (zero data redundancy)</text>
+  <text x="200" y="270" text-anchor="middle" fill="#a78bfa" font-size="9">3 triggers: INSERT / DELETE / UPDATE auto-sync</text>
+
+  <!-- Vector -->
+  <rect x="40" y="295" width="320" height="70" rx="8" fill="#120e2e" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="200" y="315" text-anchor="middle" fill="#c4b5fd" font-size="12" font-weight="600">Vector Search</text>
+  <text x="200" y="333" text-anchor="middle" fill="#a78bfa" font-size="9">Embeddings stored as SQLite BLOB</text>
+  <text x="200" y="349" text-anchor="middle" fill="#a78bfa" font-size="9">Cosine similarity computation</text>
+
+  <!-- CJK -->
+  <rect x="40" y="375" width="320" height="42" rx="8" fill="#120e2e" stroke="#f59e0b" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="200" y="395" text-anchor="middle" fill="#fbbf24" font-size="11" font-weight="600">CJK Auto-Fallback</text>
+  <text x="200" y="409" text-anchor="middle" fill="#d97706" font-size="9">FTS5 fails &#x2192; LIKE fallback (Chinese/Japanese/Korean)</text>
+
+  <!-- Hybrid -->
+  <rect x="40" y="427" width="320" height="55" rx="8" fill="#120e2e" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="200" y="448" text-anchor="middle" fill="#86efac" font-size="12" font-weight="700">Hybrid Merge</text>
+  <text x="200" y="466" text-anchor="middle" fill="#4ade80" font-size="10">Vector 0.7 + Keyword 0.3 weighted fusion</text>
+
+  <line x1="200" y1="285" x2="200" y2="295" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arrowViolet)"/>
+  <line x1="200" y1="365" x2="200" y2="375" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arrowViolet)"/>
+  <line x1="200" y1="417" x2="200" y2="427" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+
+  <!-- Embedding Provider -->
+  <rect x="400" y="200" width="310" height="70" rx="8" fill="#120e2e" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="555" y="220" text-anchor="middle" fill="#c4b5fd" font-size="12" font-weight="600">Embedding Provider</text>
+  <text x="555" y="238" text-anchor="middle" fill="#a78bfa" font-size="9">OpenAI / custom:URL / noop (offline mode)</text>
+  <text x="555" y="254" text-anchor="middle" fill="#fbbf24" font-size="9" font-weight="600">&#x2726; embedBatch() &#x2014; 100/batch (exclusive)</text>
+
+  <!-- Cache -->
+  <rect x="400" y="280" width="310" height="55" rx="8" fill="#120e2e" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="555" y="300" text-anchor="middle" fill="#c4b5fd" font-size="12" font-weight="600">Embedding Cache (LRU)</text>
+  <text x="555" y="318" text-anchor="middle" fill="#a78bfa" font-size="9">embedding_cache table &#xB7; 10,000 entries &#xB7; content_hash dedup</text>
+
+  <!-- Chunker -->
+  <rect x="400" y="345" width="310" height="55" rx="8" fill="#120e2e" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="555" y="365" text-anchor="middle" fill="#c4b5fd" font-size="12" font-weight="600">Markdown Chunker</text>
+  <text x="555" y="383" text-anchor="middle" fill="#a78bfa" font-size="9">Heading-aware split &#xB7; configurable token limit (default 512)</text>
+
+  <!-- Hygiene -->
+  <rect x="400" y="410" width="310" height="72" rx="8" fill="#120e2e" stroke="#f59e0b" stroke-width="1"/>
+  <text x="555" y="430" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="600">Memory Hygiene Engine</text>
+  <text x="555" y="448" text-anchor="middle" fill="#d97706" font-size="9">Archive 7d &#x2192; Purge 30d &#x2192; Conversation prune</text>
+  <text x="555" y="464" text-anchor="middle" fill="#d97706" font-size="9">12h throttle &#xB7; self-maintaining, zero manual cleanup</text>
+
+  <!-- Session-Aware -->
+  <rect x="750" y="200" width="310" height="85" rx="8" fill="#120e2e" stroke="#00e5ff" stroke-width="1.5"/>
+  <text x="905" y="220" text-anchor="middle" fill="#67e8f9" font-size="12" font-weight="700">Session-Aware Storage</text>
+  <text x="905" y="238" text-anchor="middle" fill="#22d3ee" font-size="9">session_key &#xB7; channel &#xB7; sender 3D tagging</text>
+  <text x="905" y="254" text-anchor="middle" fill="#22d3ee" font-size="9">4-level DM isolation &#xB7; cross-channel identity merge</text>
+  <text x="905" y="270" text-anchor="middle" fill="#fbbf24" font-size="9" font-weight="600">&#x2726; ZeroClaw lacks this (exclusive)</text>
+
+  <!-- Dual Backend -->
+  <rect x="750" y="295" width="145" height="55" rx="8" fill="#120e2e" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="822" y="315" text-anchor="middle" fill="#c4b5fd" font-size="11" font-weight="600">SQLite Backend</text>
+  <text x="822" y="333" text-anchor="middle" fill="#a78bfa" font-size="9">Full-featured search</text>
+
+  <rect x="905" y="295" width="155" height="55" rx="8" fill="#120e2e" stroke="#8b5cf6" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="982" y="315" text-anchor="middle" fill="#c4b5fd" font-size="11" font-weight="600">Markdown Backend</text>
+  <text x="982" y="333" text-anchor="middle" fill="#a78bfa" font-size="9">Append-only audit trail</text>
+
+  <!-- Auto-Save -->
+  <rect x="750" y="360" width="310" height="42" rx="8" fill="#120e2e" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="905" y="380" text-anchor="middle" fill="#c4b5fd" font-size="12" font-weight="600">Auto-Save</text>
+  <text x="905" y="396" text-anchor="middle" fill="#a78bfa" font-size="9">User/Assistant messages auto-persist + Upsert semantics</text>
+
+  <!-- Safe Reindex -->
+  <rect x="750" y="412" width="310" height="70" rx="8" fill="#120e2e" stroke="#22c55e" stroke-width="1"/>
+  <text x="905" y="432" text-anchor="middle" fill="#86efac" font-size="12" font-weight="600">Safe Reindex</text>
+  <text x="905" y="450" text-anchor="middle" fill="#4ade80" font-size="9">FTS5 rebuild + batch re-embed</text>
+  <text x="905" y="466" text-anchor="middle" fill="#4ade80" font-size="9">Zero downtime &#xB7; highclaw memory sync</text>
+
+  <!-- CLI -->
+  <rect x="40" y="492" width="1020" height="35" rx="8" fill="#120e2e" stroke="#00e5ff" stroke-width="1"/>
+  <text x="550" y="514" text-anchor="middle" fill="#67e8f9" font-size="11" font-weight="600">CLI: highclaw memory search | get | list | status | sync | reset</text>
+
+  <!-- Parameterized queries -->
+  <rect x="40" y="537" width="1020" height="28" rx="6" fill="#0a2a0f" stroke="#22c55e" stroke-width="1"/>
+  <text x="550" y="556" text-anchor="middle" fill="#86efac" font-size="10" font-weight="600">database/sql parameterized queries (? placeholders) &#x2014; SQL injection eliminated &#xB7; WAL mode &#xB7; busy_timeout</text>
+
+  <!-- SQLite Driver Layer -->
+  <rect x="20" y="615" width="1060" height="180" rx="12" fill="url(#sqliteGrad)" stroke="#00e5ff" stroke-width="1.5" filter="url(#shadow)"/>
+
+  <text x="550" y="640" text-anchor="middle" fill="#00e5ff" font-size="15" font-weight="700" filter="url(#glowCyan)">modernc.org/sqlite &#x2014; Pure Go In-Process SQLite Driver</text>
+  <text x="550" y="658" text-anchor="middle" fill="#5a7a8a" font-size="10">Zero CGO &#xB7; Zero system deps &#xB7; Cross-compile ready &#xB7; ccgo auto-translate C &#x2192; Go</text>
+
+  <!-- Performance bars -->
+  <rect x="50" y="675" width="1010" height="105" rx="8" fill="url(#perfGrad)" stroke="#22c55e" stroke-width="1"/>
+  <text x="550" y="695" text-anchor="middle" fill="#86efac" font-size="13" font-weight="700">Performance &#x2014; SQLite Operation Latency</text>
+
+  <rect x="290" y="708" width="750" height="16" rx="3" fill="#ef4444" opacity="0.7"/>
+  <text x="80" y="720" fill="#fca5a5" font-size="10" font-weight="600">os/exec (old)</text>
+  <text x="1050" y="720" text-anchor="end" fill="#fca5a5" font-size="10">5~15 ms</text>
+
+  <rect x="290" y="730" width="38" height="16" rx="3" fill="#8b5cf6" opacity="0.9"/>
+  <text x="80" y="742" fill="#c4b5fd" font-size="10" font-weight="700">modernc (current)</text>
+  <text x="340" y="742" fill="#c4b5fd" font-size="10" font-weight="700">20~250 &#xB5;s  &#x26A1; 30~60x faster</text>
+
+  <rect x="290" y="752" width="18" height="16" rx="3" fill="#22c55e" opacity="0.7"/>
+  <text x="80" y="764" fill="#86efac" font-size="10">CGO (C native)</text>
+  <text x="340" y="764" fill="#86efac" font-size="10">10~100 &#xB5;s</text>
+
+  <text x="550" y="790" text-anchor="middle" fill="#5a7a8a" font-size="9">modernc vs CGO: only 1~2.5x gap, but zero engineering cost &#x2014; no gcc/clang, no C cross-compile, no dynamic linking</text>
+
+  <rect x="340" y="800" width="420" height="16" rx="8" fill="#002a3a" stroke="#00e5ff" stroke-width="0.5"/>
+  <text x="550" y="812" text-anchor="middle" fill="#00e5ff" font-size="9" font-weight="600">brain.db &#xB7; FTS5 + Vector + Hybrid &#xB7; Pure Go &#xB7; Zero deps &#xB7; Production-ready</text>
+</svg>
