@@ -16,6 +16,7 @@ type embeddingProvider interface {
 	name() string
 	dimensions() int
 	embedOne(text string) ([]float32, error)
+	embedBatch(texts []string) ([][]float32, error)
 }
 
 type noopEmbedding struct{}
@@ -23,6 +24,9 @@ type noopEmbedding struct{}
 func (n noopEmbedding) name() string                       { return "none" }
 func (n noopEmbedding) dimensions() int                    { return 0 }
 func (n noopEmbedding) embedOne(string) ([]float32, error) { return nil, nil }
+func (n noopEmbedding) embedBatch(texts []string) ([][]float32, error) {
+	return make([][]float32, len(texts)), nil
+}
 
 type openAIEmbedding struct {
 	baseURL string
@@ -96,6 +100,79 @@ func (o *openAIEmbedding) embedOne(text string) ([]float32, error) {
 	return out.Data[0].Embedding, nil
 }
 
+// embedBatch 批量获取 embedding，一次 API 调用处理多个文本
+func (o *openAIEmbedding) embedBatch(texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(o.apiKey) == "" {
+		return make([][]float32, len(texts)), nil
+	}
+	cleaned := make([]string, 0, len(texts))
+	idxMap := make([]int, 0, len(texts))
+	for i, t := range texts {
+		if strings.TrimSpace(t) != "" {
+			cleaned = append(cleaned, t)
+			idxMap = append(idxMap, i)
+		}
+	}
+	if len(cleaned) == 0 {
+		return make([][]float32, len(texts)), nil
+	}
+
+	const batchSize = 100
+	result := make([][]float32, len(texts))
+
+	for start := 0; start < len(cleaned); start += batchSize {
+		end := start + batchSize
+		if end > len(cleaned) {
+			end = len(cleaned)
+		}
+		chunk := cleaned[start:end]
+
+		body := map[string]any{
+			"model": o.model,
+			"input": chunk,
+		}
+		if o.dims > 0 {
+			body["dimensions"] = o.dims
+		}
+		payload, _ := json.Marshal(body)
+		req, err := http.NewRequest(http.MethodPost, o.embeddingsURL(), bytes.NewReader(payload))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+o.apiKey)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := o.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		var out struct {
+			Data []struct {
+				Embedding []float32 `json:"embedding"`
+				Index     int       `json:"index"`
+			} `json:"data"`
+			Error map[string]any `json:"error"`
+		}
+		decErr := json.NewDecoder(resp.Body).Decode(&out)
+		resp.Body.Close()
+		if decErr != nil {
+			return nil, decErr
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("embedding batch API error %d", resp.StatusCode)
+		}
+		for _, d := range out.Data {
+			absIdx := start + d.Index
+			if absIdx >= 0 && absIdx < len(idxMap) {
+				result[idxMap[absIdx]] = d.Embedding
+			}
+		}
+	}
+	return result, nil
+}
+
 func createEmbeddingProvider(cfg *config.Config) embeddingProvider {
 	if cfg == nil {
 		return noopEmbedding{}
@@ -132,7 +209,7 @@ func createEmbeddingProvider(cfg *config.Config) embeddingProvider {
 			apiKey:  strings.TrimSpace(pcfg.APIKey),
 			model:   model,
 			dims:    dims,
-			client:  &http.Client{Timeout: 20 * time.Second},
+			client:  &http.Client{Timeout: 60 * time.Second},
 		}
 	case strings.HasPrefix(provider, "custom:http://"), strings.HasPrefix(provider, "custom:https://"):
 		pcfg, ok := resolveProviderConfig(cfg, "openai")
@@ -148,7 +225,7 @@ func createEmbeddingProvider(cfg *config.Config) embeddingProvider {
 			apiKey:  strings.TrimSpace(pcfg.APIKey),
 			model:   model,
 			dims:    dims,
-			client:  &http.Client{Timeout: 20 * time.Second},
+			client:  &http.Client{Timeout: 60 * time.Second},
 		}
 	default:
 		return noopEmbedding{}

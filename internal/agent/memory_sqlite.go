@@ -80,7 +80,6 @@ func (s *sqliteMemoryStore) init() error {
 	defer s.mu.Unlock()
 
 	if err := os.MkdirAll(filepath.Dir(s.dbPath), 0o755); err != nil {
-		// Fallback for restricted environments.
 		s.dbPath = filepath.Join(os.TempDir(), "highclaw-memory.db")
 		if err2 := os.MkdirAll(filepath.Dir(s.dbPath), 0o755); err2 != nil {
 			return fmt.Errorf("create memory state dir: %w", err)
@@ -100,9 +99,6 @@ CREATE TABLE IF NOT EXISTS memory_entries (
   message_id TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL
 );
-CREATE VIRTUAL TABLE IF NOT EXISTS memory_entries_fts USING fts5(
-  key, content
-);
 CREATE TABLE IF NOT EXISTS embedding_cache (
   content_hash TEXT PRIMARY KEY,
   embedding BLOB NOT NULL,
@@ -111,7 +107,6 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
 );`
 	_, err := s.exec(ddl)
 	if err == nil {
-		// Backward-compatible migration for existing DBs created before category support.
 		_, _ = s.exec("ALTER TABLE memory_entries ADD COLUMN category TEXT NOT NULL DEFAULT 'core';")
 		_, _ = s.exec("ALTER TABLE memory_entries ADD COLUMN embedding BLOB;")
 		_, _ = s.exec("ALTER TABLE memory_entries ADD COLUMN created_at TEXT NOT NULL DEFAULT '';")
@@ -125,9 +120,23 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
 		_, _ = s.exec("CREATE INDEX IF NOT EXISTS idx_memory_entries_channel_sender ON memory_entries(channel, sender);")
 		_, _ = s.exec("CREATE INDEX IF NOT EXISTS idx_embedding_cache_accessed ON embedding_cache(accessed_at);")
 		_, _ = s.exec("UPDATE memory_entries SET created_at = updated_at WHERE created_at = '';")
-		_, _ = s.exec("INSERT INTO memory_entries_fts(key, content) SELECT key, content FROM memory_entries WHERE key NOT IN (SELECT key FROM memory_entries_fts);")
+		s.ensureFTSContentMode()
 	}
 	return err
+}
+
+// ensureFTSContentMode 将 FTS5 迁移为 content= 关联表模式并创建自动同步 trigger
+func (s *sqliteMemoryStore) ensureFTSContentMode() {
+	out, _ := s.execTabs("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name='memory_entries_fts_ai';")
+	if strings.TrimSpace(out) == "1" {
+		return
+	}
+	_, _ = s.exec("DROP TABLE IF EXISTS memory_entries_fts;")
+	_, _ = s.exec("CREATE VIRTUAL TABLE memory_entries_fts USING fts5(key, content, content=memory_entries, content_rowid=rowid);")
+	_, _ = s.exec("INSERT INTO memory_entries_fts(memory_entries_fts) VALUES('rebuild');")
+	_, _ = s.exec("CREATE TRIGGER memory_entries_fts_ai AFTER INSERT ON memory_entries BEGIN INSERT INTO memory_entries_fts(rowid, key, content) VALUES (new.rowid, new.key, new.content); END;")
+	_, _ = s.exec("CREATE TRIGGER memory_entries_fts_ad AFTER DELETE ON memory_entries BEGIN INSERT INTO memory_entries_fts(memory_entries_fts, rowid, key, content) VALUES ('delete', old.rowid, old.key, old.content); END;")
+	_, _ = s.exec("CREATE TRIGGER memory_entries_fts_au AFTER UPDATE ON memory_entries BEGIN INSERT INTO memory_entries_fts(memory_entries_fts, rowid, key, content) VALUES ('delete', old.rowid, old.key, old.content); INSERT INTO memory_entries_fts(rowid, key, content) VALUES (new.rowid, new.key, new.content); END;")
 }
 
 func (s *sqliteMemoryStore) store(key, content, category string, meta memoryMeta) error {
@@ -153,12 +162,7 @@ func (s *sqliteMemoryStore) store(key, content, category string, meta memoryMeta
 		sqlQuote(now),
 	)
 	_, err := s.exec(sql)
-	if err != nil {
-		return err
-	}
-	_, _ = s.exec(fmt.Sprintf("DELETE FROM memory_entries_fts WHERE key=%s;", sqlQuote(key)))
-	_, _ = s.exec(fmt.Sprintf("INSERT INTO memory_entries_fts(key, content) VALUES(%s, %s);", sqlQuote(key), sqlQuote(content)))
-	return nil
+	return err
 }
 
 func (s *sqliteMemoryStore) forget(key string) (bool, error) {
@@ -173,7 +177,6 @@ func (s *sqliteMemoryStore) forget(key string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	_, _ = s.exec(fmt.Sprintf("DELETE FROM memory_entries_fts WHERE key=%s;", sqlQuote(key)))
 	return existed, nil
 }
 
@@ -269,14 +272,14 @@ func (s *sqliteMemoryStore) recall(query, key, sessionKey string, limit int) ([]
 		if sessionFilter != "" {
 			sql = fmt.Sprintf(
 				"SELECT m.key, m.content, m.category, m.session_key, m.channel, m.sender, m.message_id, m.created_at, m.updated_at, bm25(memory_entries_fts) "+
-					"FROM memory_entries_fts JOIN memory_entries m ON m.key = memory_entries_fts.key "+
+					"FROM memory_entries_fts JOIN memory_entries m ON m.rowid = memory_entries_fts.rowid "+
 					"WHERE memory_entries_fts MATCH %s AND m.session_key=%s ORDER BY bm25(memory_entries_fts) ASC, m.updated_at DESC LIMIT %d;",
 				sqlQuote(ftsExpr), sqlQuote(sessionFilter), limit,
 			)
 		} else {
 			sql = fmt.Sprintf(
 				"SELECT m.key, m.content, m.category, m.session_key, m.channel, m.sender, m.message_id, m.created_at, m.updated_at, bm25(memory_entries_fts) "+
-					"FROM memory_entries_fts JOIN memory_entries m ON m.key = memory_entries_fts.key "+
+					"FROM memory_entries_fts JOIN memory_entries m ON m.rowid = memory_entries_fts.rowid "+
 					"WHERE memory_entries_fts MATCH %s ORDER BY bm25(memory_entries_fts) ASC, m.updated_at DESC LIMIT %d;",
 				sqlQuote(ftsExpr), limit,
 			)
@@ -303,13 +306,13 @@ func (s *sqliteMemoryStore) recall(query, key, sessionKey string, limit int) ([]
 		return nil, err
 	}
 	keywordEntries := parseMemoryEntries(out)
-	// FTS5 默认 tokenizer 不支持 CJK 分词，若 FTS 返回空则回退 LIKE
 	if len(keywordEntries) == 0 && strings.TrimSpace(query) != "" && strings.TrimSpace(key) == "" {
 		likeOut, likeErr := s.execTabs(buildLikeRecallSQL(query, sessionFilter, limit))
 		if likeErr == nil {
 			keywordEntries = parseMemoryEntries(likeOut)
 		}
 	}
+	keywordEntries = normalizeBM25Scores(keywordEntries)
 	if strings.TrimSpace(query) == "" {
 		return keywordEntries, nil
 	}
@@ -324,8 +327,10 @@ func (s *sqliteMemoryStore) recall(query, key, sessionKey string, limit int) ([]
 	return s.hybridMerge(keywordEntries, vectorEntries, limit), nil
 }
 
+const sqlitePragmaPrefix = "PRAGMA trusted_schema = ON;\n"
+
 func (s *sqliteMemoryStore) exec(sql string) (string, error) {
-	cmd := exec.Command("sqlite3", s.dbPath, sql)
+	cmd := exec.Command("sqlite3", s.dbPath, sqlitePragmaPrefix+sql)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -340,7 +345,7 @@ func (s *sqliteMemoryStore) exec(sql string) (string, error) {
 }
 
 func (s *sqliteMemoryStore) execTabs(sql string) (string, error) {
-	cmd := exec.Command("sqlite3", "-tabs", "-noheader", s.dbPath, sql)
+	cmd := exec.Command("sqlite3", "-tabs", "-noheader", s.dbPath, sqlitePragmaPrefix+sql)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -437,10 +442,30 @@ func parseMemoryEntries(out string) []memoryEntry {
 		}
 		if len(parts) >= 10 {
 			if score, e := strconv.ParseFloat(parts[9], 64); e == nil {
-				entry.Score = 1 / (1 + math.Abs(score))
+				entry.Score = math.Abs(score)
 			}
 		}
 		entries = append(entries, entry)
+	}
+	return entries
+}
+
+// normalizeBM25Scores 将 BM25 原始绝对值归一化到 [0,1]，最高分映射为 1.0
+func normalizeBM25Scores(entries []memoryEntry) []memoryEntry {
+	if len(entries) == 0 {
+		return entries
+	}
+	maxScore := 0.0
+	for _, e := range entries {
+		if e.Score > maxScore {
+			maxScore = e.Score
+		}
+	}
+	if maxScore <= 0 {
+		return entries
+	}
+	for i := range entries {
+		entries[i].Score = entries[i].Score / maxScore
 	}
 	return entries
 }
@@ -553,8 +578,7 @@ func (s *sqliteMemoryStore) vectorSearch(queryEmbedding []byte, sessionFilter st
 		return nil, err
 	}
 	qv := bytesToVec(queryEmbedding)
-	results := parseMemoryEntries(out)
-	scored := make([]memoryEntry, 0, len(results))
+	scored := make([]memoryEntry, 0)
 	for _, row := range strings.Split(strings.TrimSpace(out), "\n") {
 		row = strings.TrimSpace(row)
 		if row == "" {
@@ -652,16 +676,13 @@ func (s *sqliteMemoryStore) hybridMerge(keywordEntries, vectorEntries []memoryEn
 	return out
 }
 
-// reindex 重建 FTS5 索引并为缺失 embedding 的条目补全向量
+// reindex 重建 FTS5 索引并为缺失 embedding 的条目批量补全向量
 func (s *sqliteMemoryStore) reindex() (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 重建 FTS 索引
-	_, _ = s.exec("DELETE FROM memory_entries_fts;")
-	_, _ = s.exec("INSERT INTO memory_entries_fts(key, content) SELECT key, content FROM memory_entries;")
+	_, _ = s.exec("INSERT INTO memory_entries_fts(memory_entries_fts) VALUES('rebuild');")
 
-	// 统计缺失 embedding 的条目
 	out, err := s.execTabs("SELECT key, content FROM memory_entries WHERE embedding IS NULL OR length(embedding) = 0;")
 	if err != nil {
 		return 0, err
@@ -670,7 +691,8 @@ func (s *sqliteMemoryStore) reindex() (int, error) {
 		return 0, nil
 	}
 
-	reEmbedded := 0
+	type kc struct{ key, content string }
+	var items []kc
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		parts := strings.SplitN(line, "\t", 2)
 		if len(parts) < 2 {
@@ -678,22 +700,50 @@ func (s *sqliteMemoryStore) reindex() (int, error) {
 		}
 		key := strings.TrimSpace(parts[0])
 		content := strings.TrimSpace(parts[1])
-		if key == "" || content == "" {
-			continue
+		if key != "" && content != "" {
+			items = append(items, kc{key, content})
 		}
+	}
+	if len(items) == 0 {
+		return 0, nil
+	}
 
-		s.mu.Unlock()
-		emb, embErr := s.getOrComputeEmbedding(content)
-		s.mu.Lock()
+	texts := make([]string, len(items))
+	for i, it := range items {
+		texts[i] = it.content
+	}
 
-		if embErr != nil || len(emb) == 0 {
-			continue
+	s.mu.Unlock()
+	batchVecs, batchErr := s.embedder.embedBatch(texts)
+	s.mu.Lock()
+
+	reEmbedded := 0
+	if batchErr == nil && len(batchVecs) == len(items) {
+		for i, vec := range batchVecs {
+			if len(vec) == 0 {
+				continue
+			}
+			b := vecToBytes(vec)
+			_, _ = s.exec(fmt.Sprintf(
+				"UPDATE memory_entries SET embedding=%s WHERE key=%s;",
+				sqlBlobOrNull(b), sqlQuote(items[i].key),
+			))
+			reEmbedded++
 		}
-		_, _ = s.exec(fmt.Sprintf(
-			"UPDATE memory_entries SET embedding=%s WHERE key=%s;",
-			sqlBlobOrNull(emb), sqlQuote(key),
-		))
-		reEmbedded++
+	} else {
+		for _, it := range items {
+			s.mu.Unlock()
+			emb, embErr := s.getOrComputeEmbedding(it.content)
+			s.mu.Lock()
+			if embErr != nil || len(emb) == 0 {
+				continue
+			}
+			_, _ = s.exec(fmt.Sprintf(
+				"UPDATE memory_entries SET embedding=%s WHERE key=%s;",
+				sqlBlobOrNull(emb), sqlQuote(it.key),
+			))
+			reEmbedded++
+		}
 	}
 	return reEmbedded, nil
 }

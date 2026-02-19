@@ -22,6 +22,17 @@ func (fakeEmbedder) embedOne(text string) ([]float32, error) {
 	}
 	return []float32{0.5, 0.5}, nil
 }
+func (f fakeEmbedder) embedBatch(texts []string) ([][]float32, error) {
+	result := make([][]float32, len(texts))
+	for i, t := range texts {
+		vec, err := f.embedOne(t)
+		if err != nil {
+			return nil, err
+		}
+		result[i] = vec
+	}
+	return result, nil
+}
 
 func TestSQLiteMemoryStoreStoreRecallForget(t *testing.T) {
 	ws := t.TempDir()
@@ -244,7 +255,6 @@ func TestSQLiteMemoryStoreRecallSpecialQueriesDoNotCrash(t *testing.T) {
 		}
 	}
 
-	// Table still exists after injection-like query.
 	out, err := store.execTabs("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_entries';")
 	if err != nil {
 		t.Fatalf("sqlite_master query: %v", err)
@@ -298,5 +308,60 @@ func TestSQLiteMemoryStoreGetListCountHealth(t *testing.T) {
 	}
 	if len(core) != 1 || core[0].Key != "a" {
 		t.Fatalf("expected core list only a, got %#v", core)
+	}
+}
+
+func TestFTSContentModeTriggersExist(t *testing.T) {
+	ws := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Agent.Workspace = ws
+	store := newSQLiteMemoryStore(cfg)
+	if err := store.init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	for _, name := range []string{"memory_entries_fts_ai", "memory_entries_fts_ad", "memory_entries_fts_au"} {
+		out, err := store.execTabs("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name='" + name + "';")
+		if err != nil {
+			t.Fatalf("check trigger %s: %v", name, err)
+		}
+		if strings.TrimSpace(out) != "1" {
+			t.Fatalf("trigger %s should exist, got %q", name, out)
+		}
+	}
+}
+
+func TestBM25ScoreNormalization(t *testing.T) {
+	entries := []memoryEntry{
+		{Key: "a", Score: 2.0},
+		{Key: "b", Score: 1.0},
+		{Key: "c", Score: 0.5},
+	}
+	normalized := normalizeBM25Scores(entries)
+	if normalized[0].Score != 1.0 {
+		t.Fatalf("expected max score normalized to 1.0, got %f", normalized[0].Score)
+	}
+	if normalized[1].Score != 0.5 {
+		t.Fatalf("expected score 0.5, got %f", normalized[1].Score)
+	}
+	if normalized[2].Score != 0.25 {
+		t.Fatalf("expected score 0.25, got %f", normalized[2].Score)
+	}
+}
+
+func TestEmbedBatchFakeEmbedder(t *testing.T) {
+	f := fakeEmbedder{}
+	texts := []string{"rust code", "python script", "generic text"}
+	vecs, err := f.embedBatch(texts)
+	if err != nil {
+		t.Fatalf("embedBatch: %v", err)
+	}
+	if len(vecs) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(vecs))
+	}
+	if vecs[0][0] != 1 || vecs[0][1] != 0 {
+		t.Fatalf("expected rust=[1,0], got %v", vecs[0])
+	}
+	if vecs[1][0] != 0 || vecs[1][1] != 1 {
+		t.Fatalf("expected python=[0,1], got %v", vecs[1])
 	}
 }

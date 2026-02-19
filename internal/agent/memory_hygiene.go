@@ -234,7 +234,7 @@ func pruneConversationRows(workspace string, days int) uint64 {
 		return 0
 	}
 	cutoff := time.Now().AddDate(0, 0, -days).UTC().Format(time.RFC3339Nano)
-	sql := fmt.Sprintf("DELETE FROM memory_entries WHERE category='conversation' AND updated_at < %s; SELECT changes();", sqlQuote(cutoff))
+	sql := fmt.Sprintf("PRAGMA trusted_schema = ON; DELETE FROM memory_entries WHERE category='conversation' AND updated_at < %s; SELECT changes();", sqlQuote(cutoff))
 	cmd := exec.Command("sqlite3", "-noheader", db, sql)
 	out, err := cmd.Output()
 	if err != nil {
