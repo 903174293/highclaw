@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"github.com/highclaw/highclaw/internal/agent"
-	skillapp "github.com/highclaw/highclaw/internal/application/skill"
 	"github.com/highclaw/highclaw/internal/config"
+	userSkills "github.com/highclaw/highclaw/internal/skills"
 	"github.com/highclaw/highclaw/internal/domain/model"
 	"github.com/highclaw/highclaw/internal/gateway/protocol"
 	"github.com/highclaw/highclaw/internal/gateway/session"
@@ -789,7 +789,7 @@ var cronTriggerCmd = &cobra.Command{
 
 var skillsCmd = &cobra.Command{
 	Use:   "skills",
-	Short: "Manage AI skills (bundled, managed, workspace)",
+	Short: "Manage AI skills",
 }
 
 var skillsListCmd = &cobra.Command{
@@ -800,37 +800,60 @@ var skillsListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		mgr := skillapp.NewManager(cfg, slog.Default())
-		items, err := mgr.DiscoverSkills(context.Background())
-		if err != nil {
-			return err
+
+		mgr := userSkills.NewManager(cfg.Agent.Workspace)
+		allSkills := mgr.LoadAll()
+
+		if len(allSkills) == 0 {
+			fmt.Println("No skills installed.")
+			fmt.Println()
+			fmt.Println("  Create one: mkdir -p ~/.highclaw/workspace/skills/my-skill")
+			fmt.Println("              echo '# My Skill' > ~/.highclaw/workspace/skills/my-skill/SKILL.md")
+			fmt.Println()
+			fmt.Println("  Or install: highclaw skills install <github-url>")
+			return nil
 		}
-		sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
-		for _, s := range items {
-			fmt.Printf("%s  %-18s  %-16s %s\n", s.Icon, s.ID, s.Status, s.Reason)
+
+		fmt.Printf("Installed skills (%d):\n\n", len(allSkills))
+
+		for _, s := range allSkills {
+			fmt.Printf("  \U0001f4c4  %-24s v%-12s \u2014 %s\n", s.Name, s.Version, truncateString(s.Description, 40))
+			if s.Source != "" {
+				fmt.Printf("      Source: %s\n", s.Source)
+			}
+			if len(s.Tags) > 0 {
+				fmt.Printf("      Tags:   %s\n", strings.Join(s.Tags, ", "))
+			}
 		}
+		fmt.Println()
+
 		return nil
 	},
 }
 
 var skillsInstallCmd = &cobra.Command{
-	Use:   "install [name-or-url]",
-	Short: "Install a skill",
-	Args:  cobra.ExactArgs(1),
+	Use:   "install [url-or-path]",
+	Short: "Install a skill from a URL or local path",
+	Long: `Install a skill from a GitHub URL or local path.
+
+Examples:
+  highclaw skills install https://github.com/user/my-skill
+  highclaw skills install /path/to/local/skill`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		target := strings.TrimSpace(args[0])
-		if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
-			return fmt.Errorf("remote skill install is not supported in this build; use a local skill id")
-		}
 		cfg, err := config.Load()
 		if err != nil {
 			return err
 		}
-		mgr := skillapp.NewManager(cfg, slog.Default())
-		if err := mgr.InstallMissingDependencies(context.Background(), "npm", []string{target}); err != nil {
-			return err
+
+		mgr := userSkills.NewManager(cfg.Agent.Workspace)
+		fmt.Printf("Installing skill from: %s\n", target)
+		if err := mgr.Install(target); err != nil {
+			return fmt.Errorf("install failed: %w", err)
 		}
-		fmt.Printf("skill install completed for: %s\n", target)
+		fmt.Println("  \u2713 Skill installed successfully!")
+		fmt.Println("  Restart your agent to activate the new skill.")
 		return nil
 	},
 }
@@ -844,18 +867,16 @@ var skillsUninstallCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		id := strings.TrimSpace(args[0])
-		if id == "" {
+		name := strings.TrimSpace(args[0])
+		if name == "" {
 			return fmt.Errorf("skill name is required")
 		}
-		if !containsString(cfg.Agent.Sandbox.Deny, id) {
-			cfg.Agent.Sandbox.Deny = append(cfg.Agent.Sandbox.Deny, id)
-			sort.Strings(cfg.Agent.Sandbox.Deny)
+
+		mgr := userSkills.NewManager(cfg.Agent.Workspace)
+		if err := mgr.Remove(name); err != nil {
+			return fmt.Errorf("uninstall failed: %w", err)
 		}
-		if err := config.Save(cfg); err != nil {
-			return err
-		}
-		fmt.Printf("skill disabled via sandbox denylist: %s\n", id)
+		fmt.Printf("  \u2713 Skill '%s' removed successfully!\n", name)
 		return nil
 	},
 }
@@ -868,19 +889,25 @@ var skillsStatusCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		mgr := skillapp.NewManager(cfg, slog.Default())
-		summary, err := mgr.GetSkillsSummary(context.Background())
-		if err != nil {
-			return err
+
+		mgr := userSkills.NewManager(cfg.Agent.Workspace)
+		allSkills := mgr.LoadAll()
+
+		openSkillsCount := 0
+		workspaceCount := 0
+		for _, s := range allSkills {
+			if s.Source == "open-skills" {
+				openSkillsCount++
+			} else {
+				workspaceCount++
+			}
 		}
-		keys := make([]string, 0, len(summary))
-		for k := range summary {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			fmt.Printf("%s: %d\n", k, summary[k])
-		}
+
+		fmt.Println("Skills Status:")
+		fmt.Println()
+		fmt.Printf("  Total skills:     %d\n", len(allSkills))
+		fmt.Printf("  Open-skills:      %d (from ~/open-skills)\n", openSkillsCount)
+		fmt.Printf("  Workspace skills: %d (from %s/skills)\n", workspaceCount, cfg.Agent.Workspace)
 		return nil
 	},
 }
@@ -2625,6 +2652,13 @@ func resolveSessionKey(input string) (string, error) {
 		return candidate, nil
 	}
 	return key, nil
+}
+
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 func boolText(ok bool) string {

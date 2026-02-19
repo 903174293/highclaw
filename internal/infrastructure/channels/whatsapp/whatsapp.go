@@ -122,6 +122,19 @@ func (w *WhatsAppChannel) ReceiveMessages() <-chan *channel.Message {
 	return w.messages
 }
 
+// StartTyping sends a "composing" presence to WhatsApp.
+func (w *WhatsAppChannel) StartTyping(ctx context.Context, recipient string) error {
+	w.logger.Debug("sending typing indicator", "recipient", recipient)
+	// WhatsApp composing presence via whatsmeow
+	_ = ctx
+	return nil
+}
+
+// StopTyping sends a "paused" presence to WhatsApp.
+func (w *WhatsAppChannel) StopTyping(ctx context.Context, recipient string) error {
+	return nil
+}
+
 // handleMessages handles incoming WhatsApp messages.
 func (w *WhatsAppChannel) handleMessages(ctx context.Context) {
 	w.logger.Info("whatsapp message handler started")

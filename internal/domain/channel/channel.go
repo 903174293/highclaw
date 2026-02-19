@@ -28,6 +28,14 @@ type Channel interface {
 
 	// ReceiveMessages returns a channel for receiving messages.
 	ReceiveMessages() <-chan *Message
+
+	// StartTyping signals that the bot is processing a response.
+	// Platforms show "typing..." indicator to the user.
+	// Implementations should repeat the indicator as needed for their platform.
+	StartTyping(ctx context.Context, recipient string) error
+
+	// StopTyping cancels any active typing indicator.
+	StopTyping(ctx context.Context, recipient string) error
 }
 
 // Message represents a message from/to a channel.
@@ -94,6 +102,8 @@ var AllChannels = []string{
 	"mattermost",
 	"nextcloud",
 	"feishu",
+	"wecom",
+	"wechat",
 	"matrix",
 	"bluebubbles",
 	"line",
@@ -160,6 +170,33 @@ func GetChannelInfo() map[string]ChannelInfo {
 			ConfigKeys:  []string{},
 			DocsURL:     "https://docs.openclaw.ai/channels/imessage",
 		},
+		"feishu": {
+			ID:          "feishu",
+			Name:        "Feishu/Lark",
+			Type:        "bot",
+			Description: "飞书/Lark Bot API",
+			AuthType:    "token",
+			ConfigKeys:  []string{"appId", "appSecret", "verifyToken"},
+			DocsURL:     "https://open.feishu.cn/document",
+		},
+		"wecom": {
+			ID:          "wecom",
+			Name:        "WeCom",
+			Type:        "bot",
+			Description: "企业微信 Bot API",
+			AuthType:    "token",
+			ConfigKeys:  []string{"corpId", "agentId", "secret"},
+			DocsURL:     "https://developer.work.weixin.qq.com/document",
+		},
+		"wechat": {
+			ID:          "wechat",
+			Name:        "WeChat",
+			Type:        "bot",
+			Description: "微信公众号/个人号 (via bridge)",
+			AuthType:    "token",
+			ConfigKeys:  []string{"mode", "appId", "appSecret"},
+			DocsURL:     "https://developers.weixin.qq.com/doc",
+		},
 	}
 }
 
@@ -194,4 +231,3 @@ func (r *Registry) All() []Channel {
 	}
 	return channels
 }
-

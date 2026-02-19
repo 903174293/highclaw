@@ -756,7 +756,7 @@ See [aieos.org](https://aieos.org) for the full schema and live examples.
 | Command | Description |
 |---------|-------------|
 | `onboard` | Quick setup (default) |
-| `onboard --interactive` | Full interactive 8-step wizard |
+| `onboard --interactive` | Full interactive 9-step wizard |
 | `onboard --channels-only` | Reconfigure channels/allowlists only (fast repair flow) |
 | `agent -m "..."` | Single message mode |
 | `agent -m "..." --session <key>` | Continue in an existing session |
@@ -771,6 +771,119 @@ See [aieos.org](https://aieos.org) for the full schema and live examples.
 | `status` | Show full system status |
 | `channel doctor` | Run health checks for configured channels |
 | `integrations info <name>` | Show setup/status details for one integration |
+| `skills list` | List all installed skills (open-skills + workspace) |
+| `skills install <url\|path>` | Install a skill from GitHub URL or local path |
+| `skills uninstall <name>` | Remove an installed skill |
+| `skills status` | Show skills summary and counts |
+
+## Skills System
+
+HighClaw features a pure-Go, SKILL.md-driven skill system that extends your agent's capabilities with specialized knowledge — zero Node.js or npm dependencies.
+
+<p align="center">
+  <img src="images/skill-architecture.svg" alt="Skill Architecture" width="100%"/>
+</p>
+
+### How Skills Work
+
+Skills are Markdown files (`SKILL.md`) that contain instructions, prompts, and context. On every conversation turn, all active skills are injected into the agent's system prompt, giving it specialized knowledge and behavior.
+
+```
+Skill Sources                    Skill Manager                   Agent Runtime
+─────────────                    ─────────────                   ─────────────
+~/open-skills/skills/  ──┐       LoadAll()                       buildSystemPrompt()
+                         ├──►    loadSkillFromMD()  ──►          ToSystemPrompt()
+<workspace>/skills/    ──┘       Install / Remove                → active in all turns
+```
+
+### Skill Directory Structure
+
+```
+~/open-skills/skills/           # Community skills (auto-synced)
+  ├── chat-logger/SKILL.md
+  ├── web-search/SKILL.md
+  ├── browser-automation-agent/SKILL.md
+  └── ... (19 community skills)
+
+<workspace>/skills/             # Your custom skills
+  ├── my-custom-skill/SKILL.md
+  └── another-skill/SKILL.md
+```
+
+### CLI Commands
+
+```bash
+# List all installed skills
+highclaw skills list
+
+# Show skills summary
+highclaw skills status
+
+# Install from GitHub
+highclaw skills install https://github.com/user/my-skill
+
+# Install from local path
+highclaw skills install /path/to/local/skill
+
+# Remove a skill
+highclaw skills uninstall my-skill
+```
+
+### Creating a Custom Skill
+
+1. Create a directory under `<workspace>/skills/`:
+
+```bash
+mkdir -p ~/.highclaw/workspace/skills/my-skill
+```
+
+2. Write a `SKILL.md` file:
+
+```markdown
+# My Custom Skill
+
+This skill teaches the agent specialized behavior for code review.
+
+## Instructions
+
+When the user asks for a code review:
+1. Check for security vulnerabilities first
+2. Then check for performance issues
+3. Finally suggest style improvements
+```
+
+3. Verify it loads:
+
+```bash
+highclaw skills list
+# Should show: my-skill v0.1.0
+```
+
+### Open-Skills Community Repository
+
+HighClaw automatically syncs the [open-skills](https://github.com/besoeasy/open-skills) community repository:
+
+- **Location**: `~/open-skills/`
+- **Sync interval**: Every 7 days (auto `git pull`)
+- **First run**: Auto `git clone --depth 1`
+- **Disable**: `export HIGHCLAW_OPEN_SKILLS_ENABLED=false`
+
+### Onboard Integration
+
+The `highclaw onboard --interactive` wizard includes Step 8/9 "Skills Configuration" where you can:
+- View all loaded skills
+- Install additional skills from URL or local path
+
+### Configuration
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `HIGHCLAW_OPEN_SKILLS_ENABLED` | `true` | Enable/disable open-skills auto-sync |
+
+Skills directory paths:
+- Open-skills: `~/open-skills/skills/`
+- Workspace skills: `<workspace>/skills/`
+
 
 ## Development
 

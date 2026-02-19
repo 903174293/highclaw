@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 650" font-family="'Segoe UI', system-ui, -apple-system, sans-serif">
+  <defs>
+    <filter id="shadow" x="-4%" y="-4%" width="108%" height="108%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.2"/></filter>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#080d14"/><stop offset="100%" stop-color="#0f1520"/></linearGradient>
+    <linearGradient id="skillGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0a1a2a"/><stop offset="100%" stop-color="#0e2236"/></linearGradient>
+    <linearGradient id="openGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0f0a2e"/><stop offset="100%" stop-color="#150e36"/></linearGradient>
+    <marker id="arrowCyan" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#00e5ff"/></marker>
+    <marker id="arrowAmber" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#f59e0b"/></marker>
+    <marker id="arrowPurple" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#c084fc"/></marker>
+    <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#34d399"/></marker>
+    <filter id="glowCyan" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <rect width="1100" height="650" rx="12" fill="url(#bgGrad)"/>
+  <g stroke="#0e2a3a" stroke-width="0.3" opacity="0.4"><line x1="0" y1="200" x2="1100" y2="200"/><line x1="0" y1="400" x2="1100" y2="400"/><line x1="200" y1="0" x2="200" y2="650"/><line x1="400" y1="0" x2="400" y2="650"/><line x1="600" y1="0" x2="600" y2="650"/><line x1="800" y1="0" x2="800" y2="650"/></g>
+
+  <text x="550" y="38" text-anchor="middle" fill="#00e5ff" font-size="22" font-weight="700" filter="url(#glowCyan)">HighClaw Skill System Architecture</text>
+  <text x="550" y="58" text-anchor="middle" fill="#5a7a8a" font-size="12">Pure Go. SKILL.md driven. Zero external runtime dependencies.</text>
+
+  <!-- LEFT: Skill Sources -->
+  <rect x="20" y="85" width="200" height="280" rx="10" fill="#0a1520" stroke="#c084fc" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="120" y="110" text-anchor="middle" fill="#c084fc" font-size="13" font-weight="600">Skill Sources</text>
+  <rect x="35" y="125" width="170" height="55" rx="8" fill="url(#openGrad)" stroke="#8b5cf6" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="120" y="145" text-anchor="middle" fill="#c084fc" font-size="10" font-weight="600">Open-Skills Repo</text>
+  <text x="120" y="158" text-anchor="middle" fill="#a8a29e" font-size="8">github.com/besoeasy/open-skills</text>
+  <text x="120" y="170" text-anchor="middle" fill="#a8a29e" font-size="8">~/open-skills/ | auto-sync 7d</text>
+  <rect x="35" y="190" width="170" height="45" rx="8" fill="url(#openGrad)" stroke="#8b5cf6" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="120" y="210" text-anchor="middle" fill="#c084fc" font-size="10" font-weight="600">Workspace Skills</text>
+  <text x="120" y="224" text-anchor="middle" fill="#a8a29e" font-size="8">&lt;workspace&gt;/skills/*/SKILL.md</text>
+  <rect x="35" y="245" width="170" height="40" rx="8" fill="url(#openGrad)" stroke="#8b5cf6" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="120" y="262" text-anchor="middle" fill="#c084fc" font-size="10" font-weight="600">GitHub URL Install</text>
+  <text x="120" y="275" text-anchor="middle" fill="#a8a29e" font-size="8">git clone --depth 1</text>
+  <rect x="35" y="295" width="170" height="40" rx="8" fill="url(#openGrad)" stroke="#8b5cf6" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="120" y="312" text-anchor="middle" fill="#c084fc" font-size="10" font-weight="600">Local Path Install</text>
+  <text x="120" y="325" text-anchor="middle" fill="#a8a29e" font-size="8">symlink or copy</text>
+  <text x="120" y="357" text-anchor="middle" fill="#5a7a8a" font-size="9" font-style="italic">HIGHCLAW_OPEN_SKILLS_ENABLED</text>
+  <line x1="220" y1="225" x2="275" y2="225" stroke="#c084fc" stroke-width="2" marker-end="url(#arrowPurple)"/>
+
+  <!-- CENTER: Skill Manager -->
+  <rect x="280" y="85" width="250" height="280" rx="10" fill="url(#skillGrad)" stroke="#00e5ff" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="405" y="110" text-anchor="middle" fill="#00e5ff" font-size="13" font-weight="600">Skill Manager</text>
+  <text x="405" y="125" text-anchor="middle" fill="#5a7a8a" font-size="9">internal/skills/skill.go</text>
+  <rect x="295" y="138" width="220" height="28" rx="6" fill="#0e1e2e"/><text x="405" y="157" text-anchor="middle" fill="#4dd0e1" font-size="10">LoadAll() — open + workspace</text>
+  <rect x="295" y="172" width="220" height="28" rx="6" fill="#0e1e2e"/><text x="405" y="191" text-anchor="middle" fill="#4dd0e1" font-size="10">Install(source) — URL / path</text>
+  <rect x="295" y="206" width="220" height="28" rx="6" fill="#0e1e2e"/><text x="405" y="225" text-anchor="middle" fill="#4dd0e1" font-size="10">Remove(name) — uninstall</text>
+  <rect x="295" y="240" width="220" height="28" rx="6" fill="#0e1e2e"/><text x="405" y="259" text-anchor="middle" fill="#4dd0e1" font-size="10">ToSystemPrompt() — inject</text>
+  <rect x="295" y="274" width="220" height="28" rx="6" fill="#0e1e2e"/><text x="405" y="293" text-anchor="middle" fill="#4dd0e1" font-size="10">ensureOpenSkills() — sync</text>
+  <rect x="295" y="308" width="220" height="28" rx="6" fill="#0e1e2e"/><text x="405" y="327" text-anchor="middle" fill="#4dd0e1" font-size="10">InitSkillsDir() — setup</text>
+  <line x1="530" y1="180" x2="580" y2="145" stroke="#00e5ff" stroke-width="2" marker-end="url(#arrowCyan)"/>
+  <line x1="530" y1="250" x2="580" y2="250" stroke="#f59e0b" stroke-width="2" marker-end="url(#arrowAmber)"/>
+  <line x1="530" y1="300" x2="580" y2="340" stroke="#34d399" stroke-width="2" marker-end="url(#arrowGreen)"/>
+
+  <!-- RIGHT-TOP: CLI Commands -->
+  <rect x="585" y="85" width="230" height="125" rx="10" fill="#0a1520" stroke="#00e5ff" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="700" y="108" text-anchor="middle" fill="#00e5ff" font-size="13" font-weight="600">CLI Commands</text>
+  <text x="700" y="122" text-anchor="middle" fill="#5a7a8a" font-size="9">internal/cli/commands.go</text>
+  <rect x="598" y="132" width="204" height="22" rx="5" fill="#0e1e2e"/><text x="700" y="148" text-anchor="middle" fill="#4dd0e1" font-size="9">highclaw skills list</text>
+  <rect x="598" y="158" width="204" height="22" rx="5" fill="#0e1e2e"/><text x="700" y="174" text-anchor="middle" fill="#4dd0e1" font-size="9">highclaw skills install &lt;url|path&gt;</text>
+  <rect x="598" y="184" width="100" height="22" rx="5" fill="#0e1e2e"/><text x="648" y="200" text-anchor="middle" fill="#4dd0e1" font-size="9">skills uninstall</text>
+  <rect x="702" y="184" width="100" height="22" rx="5" fill="#0e1e2e"/><text x="752" y="200" text-anchor="middle" fill="#4dd0e1" font-size="9">skills status</text>
+
+  <!-- RIGHT-MID: Agent System Prompt -->
+  <rect x="585" y="220" width="230" height="85" rx="10" fill="#0a1520" stroke="#f59e0b" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="700" y="243" text-anchor="middle" fill="#fbbf24" font-size="13" font-weight="600">Agent System Prompt</text>
+  <text x="700" y="257" text-anchor="middle" fill="#5a7a8a" font-size="9">internal/agent/agent.go</text>
+  <rect x="598" y="267" width="204" height="30" rx="6" fill="#1a1708" stroke="#f59e0b" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="700" y="281" text-anchor="middle" fill="#fbbf24" font-size="9" font-weight="600">buildSystemPrompt()</text>
+  <text x="700" y="292" text-anchor="middle" fill="#a8a29e" font-size="8">skills.ToSystemPrompt(allSkills)</text>
+
+  <!-- RIGHT-BOT: Gateway HTTP API -->
+  <rect x="585" y="315" width="230" height="75" rx="10" fill="#0a1520" stroke="#34d399" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="700" y="338" text-anchor="middle" fill="#34d399" font-size="13" font-weight="600">Gateway HTTP API</text>
+  <text x="700" y="352" text-anchor="middle" fill="#5a7a8a" font-size="9">interfaces/http/handlers.go</text>
+  <rect x="598" y="360" width="204" height="22" rx="5" fill="#0e1e2e"/><text x="700" y="376" text-anchor="middle" fill="#6ee7b7" font-size="9">GET /api/skills — handleListSkills</text>
+
+  <!-- FAR RIGHT: Onboard Wizard -->
+  <rect x="835" y="85" width="245" height="125" rx="10" fill="#0a1520" stroke="#06b6d4" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="957" y="108" text-anchor="middle" fill="#06b6d4" font-size="13" font-weight="600">Onboard Wizard</text>
+  <text x="957" y="122" text-anchor="middle" fill="#5a7a8a" font-size="9">internal/cli/onboard.go</text>
+  <rect x="848" y="135" width="220" height="28" rx="6" fill="#0e1e2e"/><text x="958" y="153" text-anchor="middle" fill="#67e8f9" font-size="10">Step 8/9: Skills Configuration</text>
+  <rect x="848" y="168" width="220" height="28" rx="6" fill="#0e1e2e"/><text x="958" y="187" text-anchor="middle" fill="#67e8f9" font-size="10">setupSkills(workspace)</text>
+  <line x1="815" y1="148" x2="843" y2="148" stroke="#06b6d4" stroke-width="2" marker-end="url(#arrowCyan)"/>
+
+  <!-- BOTTOM-LEFT: SKILL.md Format -->
+  <rect x="20" y="400" width="530" height="230" rx="10" fill="#0a1520" stroke="#38bdf8" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="285" y="425" text-anchor="middle" fill="#38bdf8" font-size="13" font-weight="600">SKILL.md Format — Skill Definition</text>
+  <rect x="35" y="440" width="245" height="175" rx="8" fill="#0e1e2e"/>
+  <text x="50" y="458" fill="#7dd3fc" font-size="10" font-weight="600">Directory Structure</text>
+  <text x="50" y="476" fill="#a8a29e" font-size="9" font-family="monospace">~/open-skills/skills/</text>
+  <text x="50" y="492" fill="#a8a29e" font-size="9" font-family="monospace">  chat-logger/SKILL.md</text>
+  <text x="50" y="508" fill="#a8a29e" font-size="9" font-family="monospace">  web-search/SKILL.md</text>
+  <text x="50" y="524" fill="#a8a29e" font-size="9" font-family="monospace">  browser-auto/SKILL.md</text>
+  <text x="50" y="540" fill="#a8a29e" font-size="9" font-family="monospace">  ... (19 community skills)</text>
+  <text x="50" y="568" fill="#a8a29e" font-size="9" font-family="monospace">&lt;workspace&gt;/skills/</text>
+  <text x="50" y="584" fill="#a8a29e" font-size="9" font-family="monospace">  my-custom-skill/SKILL.md</text>
+  <text x="50" y="600" fill="#a8a29e" font-size="9" font-family="monospace">  another-skill/SKILL.md</text>
+  <rect x="295" y="440" width="240" height="175" rx="8" fill="#0e1e2e"/>
+  <text x="310" y="458" fill="#7dd3fc" font-size="10" font-weight="600">Skill Struct (Go)</text>
+  <text x="310" y="478" fill="#a8a29e" font-size="9" font-family="monospace">type Skill struct {</text>
+  <text x="310" y="494" fill="#a8a29e" font-size="9" font-family="monospace">  Name        string</text>
+  <text x="310" y="510" fill="#a8a29e" font-size="9" font-family="monospace">  Description string</text>
+  <text x="310" y="526" fill="#a8a29e" font-size="9" font-family="monospace">  Version     string</text>
+  <text x="310" y="542" fill="#a8a29e" font-size="9" font-family="monospace">  Tags        []string</text>
+  <text x="310" y="558" fill="#a8a29e" font-size="9" font-family="monospace">  Prompts     []string</text>
+  <text x="310" y="574" fill="#a8a29e" font-size="9" font-family="monospace">  Source      string</text>
+  <text x="310" y="590" fill="#a8a29e" font-size="9" font-family="monospace">  Location    string</text>
+  <text x="310" y="606" fill="#a8a29e" font-size="9" font-family="monospace">}</text>
+
+  <!-- BOTTOM-RIGHT: Data Flow -->
+  <rect x="570" y="400" width="510" height="230" rx="10" fill="#0a1520" stroke="#a78bfa" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="825" y="425" text-anchor="middle" fill="#a78bfa" font-size="13" font-weight="600">Data Flow — Skill Lifecycle</text>
+  <rect x="585" y="442" width="140" height="36" rx="6" fill="#1e1b4b" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="655" y="457" text-anchor="middle" fill="#c4b5fd" font-size="9" font-weight="600">1. Source Discovery</text>
+  <text x="655" y="470" text-anchor="middle" fill="#a8a29e" font-size="8">clone / symlink / copy</text>
+  <line x1="725" y1="460" x2="745" y2="460" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+  <rect x="750" y="442" width="140" height="36" rx="6" fill="#1e1b4b" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="820" y="457" text-anchor="middle" fill="#c4b5fd" font-size="9" font-weight="600">2. SKILL.md Parse</text>
+  <text x="820" y="470" text-anchor="middle" fill="#a8a29e" font-size="8">loadSkillFromMD()</text>
+  <line x1="890" y1="460" x2="910" y2="460" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+  <rect x="915" y="442" width="150" height="36" rx="6" fill="#1e1b4b" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="990" y="457" text-anchor="middle" fill="#c4b5fd" font-size="9" font-weight="600">3. Skill Registry</text>
+  <text x="990" y="470" text-anchor="middle" fill="#a8a29e" font-size="8">[]Skill sorted by name</text>
+  <rect x="585" y="495" width="220" height="36" rx="6" fill="#0f2318" stroke="#34d399" stroke-width="1"/>
+  <text x="695" y="510" text-anchor="middle" fill="#6ee7b7" font-size="9" font-weight="600">4. System Prompt Injection</text>
+  <text x="695" y="523" text-anchor="middle" fill="#a8a29e" font-size="8">ToSystemPrompt() in buildSystemPrompt()</text>
+  <line x1="805" y1="513" x2="825" y2="513" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+  <rect x="830" y="495" width="235" height="36" rx="6" fill="#0f2318" stroke="#34d399" stroke-width="1"/>
+  <text x="947" y="510" text-anchor="middle" fill="#6ee7b7" font-size="9" font-weight="600">5. Agent Runtime</text>
+  <text x="947" y="523" text-anchor="middle" fill="#a8a29e" font-size="8">Skills active in every conversation turn</text>
+  <rect x="585" y="548" width="480" height="36" rx="6" fill="#1a1708" stroke="#f59e0b" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="825" y="563" text-anchor="middle" fill="#fbbf24" font-size="10" font-weight="600">Environment Controls</text>
+  <text x="825" y="576" text-anchor="middle" fill="#a8a29e" font-size="8">HIGHCLAW_OPEN_SKILLS_ENABLED  |  Sync interval: 7 days  |  ~/open-skills + workspace/skills</text>
+  <rect x="585" y="596" width="155" height="26" rx="6" fill="#0e1e2e"/><text x="662" y="614" text-anchor="middle" fill="#4dd0e1" font-size="10">19 open-skills</text>
+  <rect x="748" y="596" width="155" height="26" rx="6" fill="#0e1e2e"/><text x="825" y="614" text-anchor="middle" fill="#4dd0e1" font-size="10">N workspace skills</text>
+  <rect x="911" y="596" width="155" height="26" rx="6" fill="#0e1e2e"/><text x="988" y="614" text-anchor="middle" fill="#4dd0e1" font-size="10">0 npm dependencies</text>
+</svg>

@@ -14,6 +14,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/highclaw/highclaw/internal/config"
+	"github.com/highclaw/highclaw/internal/skills"
 	"github.com/spf13/cobra"
 )
 
@@ -100,11 +101,11 @@ func runWizard(cfg *config.Config) error {
 	fmt.Println("  This wizard will configure your agent in under 60 seconds.")
 	fmt.Println()
 
-	printStep(1, 8, "Workspace Setup")
+	printStep(1, 9, "Workspace Setup")
 	workspace := setupWorkspace()
 	cfg.Agent.Workspace = workspace
 
-	printStep(2, 8, "AI Provider & API Key")
+	printStep(2, 9, "AI Provider & API Key")
 	provider, apiKey, model := setupProvider()
 	cfg.Agent.Model = provider + "/" + model
 	if cfg.Agent.Providers == nil {
@@ -119,22 +120,25 @@ func runWizard(cfg *config.Config) error {
 	}
 	cfg.Agent.Providers[provider] = p
 
-	printStep(3, 8, "Channels (How You Talk to HighClaw)")
+	printStep(3, 9, "Channels (How You Talk to HighClaw)")
 	cfg.Channels = setupChannels()
 
-	printStep(4, 8, "Tunnel (Expose to Internet)")
+	printStep(4, 9, "Tunnel (Expose to Internet)")
 	cfg.Tunnel = setupTunnel()
 
-	printStep(5, 8, "Tool Mode & Security")
+	printStep(5, 9, "Tool Mode & Security")
 	cfg.Composio, cfg.Secrets = setupToolMode()
 
-	printStep(6, 8, "Memory Configuration")
+	printStep(6, 9, "Memory Configuration")
 	cfg.Memory = setupMemory()
 
-	printStep(7, 8, "Project Context (Personalize Your Agent)")
+	printStep(7, 9, "Project Context (Personalize Your Agent)")
 	ctx := setupProjectContext()
 
-	printStep(8, 8, "Workspace Files")
+	printStep(8, 9, "Skills Configuration")
+	setupSkills(workspace)
+
+	printStep(9, 9, "Workspace Files")
 	createdFiles, skippedFiles, _, ws, err := ensureWorkspaceLayout(workspace, ctx)
 	if err != nil {
 		return err
@@ -423,9 +427,12 @@ func setupChannels() config.ChannelsConfig {
 			statusLineWithText("WhatsApp", channelState(out.WhatsApp != nil, "✅ connected", "— Business Cloud API")),
 			statusLineWithText("IRC", channelState(out.IRC != nil, "✅ configured", "— IRC over TLS")),
 			statusLineWithText("Webhook", channelState(out.Webhook != nil, "✅ configured", "— HTTP endpoint")),
+			statusLineWithText("飞书 Feishu", channelState(out.Feishu != nil, "✅ connected", "— 企业协作平台")),
+			statusLineWithText("企业微信 WeCom", channelState(out.WeCom != nil, "✅ connected", "— 企业通讯工具")),
+			statusLineWithText("微信 WeChat", channelState(out.WeChat != nil, "✅ connected", "— 公众号/个人号")),
 			"Done — finish setup",
 		}
-		choice := promptSelect("Connect a channel (or Done to continue)", options, 8)
+		choice := promptSelect("Connect a channel (or Done to continue)", options, 11)
 		fmt.Printf("  Connect a channel (or Done to continue): %s\n", options[choice])
 		switch choice {
 		case 0:
@@ -616,6 +623,112 @@ func setupChannels() config.ChannelsConfig {
 			}
 			out.Webhook = &config.WebhookConfig{Port: port, Secret: sec}
 			fmt.Printf("  ✅ Webhook on port %d\n\n", port)
+		case 8:
+			fmt.Println()
+			fmt.Println("  飞书 Setup — 连接飞书企业协作平台")
+			printBullet("1. 访问 https://open.feishu.cn/app 创建企业自建应用")
+			printBullet("2. 添加机器人能力，获取 App ID 和 App Secret")
+			printBullet("3. 配置事件订阅的 Request URL 和 Encrypt Key")
+			fmt.Println()
+			appID := strings.TrimSpace(promptString("App ID", ""))
+			appSecret := strings.TrimSpace(promptString("App Secret", ""))
+			if appID == "" || appSecret == "" {
+				fmt.Println("  → Skipped")
+				continue
+			}
+			verifyToken := strings.TrimSpace(promptString("Verification Token (可选)", ""))
+			encryptKey := strings.TrimSpace(promptString("Encrypt Key (可选)", ""))
+			users := parseCSV(promptString("允许的用户 ID (逗号分隔, * 表示所有)", "*"))
+			out.Feishu = &config.FeishuConfig{
+				AppID:        appID,
+				AppSecret:    appSecret,
+				VerifyToken:  verifyToken,
+				EncryptKey:   encryptKey,
+				AllowedUsers: users,
+			}
+			fmt.Println("  ✅ 飞书配置完成")
+			fmt.Println()
+		case 9:
+			fmt.Println()
+			fmt.Println("  企业微信 Setup — 连接企业微信")
+			printBullet("1. 访问 https://work.weixin.qq.com 管理后台")
+			printBullet("2. 创建自建应用，获取 Corp ID、Agent ID 和 Secret")
+			printBullet("3. 配置接收消息服务器的 Token 和 EncodingAESKey")
+			fmt.Println()
+			corpID := strings.TrimSpace(promptString("Corp ID (企业 ID)", ""))
+			agentIDStr := strings.TrimSpace(promptString("Agent ID", ""))
+			secret := strings.TrimSpace(promptString("Secret", ""))
+			if corpID == "" || secret == "" {
+				fmt.Println("  → Skipped")
+				continue
+			}
+			agentID, _ := strconv.Atoi(agentIDStr)
+			token := strings.TrimSpace(promptString("Token (可选)", ""))
+			encodingKey := strings.TrimSpace(promptString("EncodingAESKey (可选)", ""))
+			users := parseCSV(promptString("允许的用户 ID (逗号分隔, * 表示所有)", "*"))
+			out.WeCom = &config.WeComConfig{
+				CorpID:         corpID,
+				AgentID:        agentID,
+				Secret:         secret,
+				Token:          token,
+				EncodingAESKey: encodingKey,
+				AllowedUsers:   users,
+			}
+			fmt.Println("  ✅ 企业微信配置完成")
+			fmt.Println()
+		case 10:
+			fmt.Println()
+			fmt.Println("  微信 Setup — 连接微信公众号或个人号")
+			printBullet("公众号模式: 需要认证服务号，支持客服消息")
+			printBullet("个人号模式: 需要第三方桥接服务 (如 wechaty)")
+			fmt.Println()
+			modes := []string{"公众号 Official Account", "个人号 Personal (需桥接服务)"}
+			modeIdx := promptSelect("选择微信接入模式", modes, 0)
+			fmt.Printf("  选择微信接入模式: %s\n", modes[modeIdx])
+			if modeIdx == 0 {
+				fmt.Println()
+				printBullet("1. 访问 https://mp.weixin.qq.com 微信公众平台")
+				printBullet("2. 获取 AppID 和 AppSecret")
+				printBullet("3. 配置服务器配置的 Token 和 EncodingAESKey")
+				fmt.Println()
+				appID := strings.TrimSpace(promptString("AppID", ""))
+				appSecret := strings.TrimSpace(promptString("AppSecret", ""))
+				if appID == "" || appSecret == "" {
+					fmt.Println("  → Skipped")
+					continue
+				}
+				token := strings.TrimSpace(promptString("Token", ""))
+				encodingKey := strings.TrimSpace(promptString("EncodingAESKey (可选)", ""))
+				users := parseCSV(promptString("允许的用户 OpenID (逗号分隔, * 表示所有)", "*"))
+				out.WeChat = &config.WeChatConfig{
+					Mode:           "official",
+					AppID:          appID,
+					AppSecret:      appSecret,
+					Token:          token,
+					EncodingAESKey: encodingKey,
+					AllowedUsers:   users,
+				}
+			} else {
+				fmt.Println()
+				printBullet("个人号模式需要运行 wechaty 或类似桥接服务")
+				printBullet("桥接服务会提供 HTTP API 供 HighClaw 调用")
+				fmt.Println()
+				bridgeURL := strings.TrimSpace(promptString("桥接服务 URL (如 http://localhost:8788)", ""))
+				if bridgeURL == "" {
+					fmt.Println("  → Skipped")
+					continue
+				}
+				bridgeToken := strings.TrimSpace(promptString("桥接服务 Token (可选)", ""))
+				users := parseCSV(promptString("允许的用户 wxid (逗号分隔, * 表示所有)", "*"))
+				out.WeChat = &config.WeChatConfig{
+					Mode:                "personal",
+					PersonalBridgeURL:   bridgeURL,
+					PersonalBridgeToken: bridgeToken,
+					AllowedUsers:        users,
+				}
+			}
+			fmt.Println("  ✅ 微信配置完成")
+			fmt.Println()
 		default:
 			fmt.Printf("  %s Channels: %s\n", green("✓"), green(channelsSummary(out)))
 			return out
@@ -1427,6 +1540,15 @@ func channelsSummary(c config.ChannelsConfig) string {
 	if c.Webhook != nil {
 		x = append(x, "Webhook")
 	}
+	if c.Feishu != nil {
+		x = append(x, "Feishu")
+	}
+	if c.WeCom != nil {
+		x = append(x, "WeCom")
+	}
+	if c.WeChat != nil {
+		x = append(x, "WeChat")
+	}
 	return strings.Join(x, ", ")
 }
 
@@ -1560,4 +1682,55 @@ func expandPath(in string) string {
 		return filepath.Join(home, strings.TrimPrefix(v, "~/"))
 	}
 	return v
+}
+
+// setupSkills 在 onboard 向导中配置 skills
+func setupSkills(workspace string) {
+	printBullet("Skills extend your agent's capabilities with specialized knowledge.")
+	printBullet("Open-skills from the community are auto-loaded from ~/open-skills/")
+	printBullet("Custom skills can be placed in " + filepath.Join(workspace, "skills") + "/")
+	fmt.Println()
+
+	mgr := skills.NewManager(workspace)
+	allSkills := mgr.LoadAll()
+
+	if len(allSkills) == 0 {
+		fmt.Printf("  %s Skills: %s (community skills will auto-load on first run)\n", green("✓"), yellow("none installed"))
+	} else {
+		fmt.Printf("  %s Skills: %d installed (open-skills + custom)\n", green("✓"), len(allSkills))
+		for _, s := range allSkills {
+			fmt.Printf("      • %s v%s\n", s.Name, s.Version)
+		}
+	}
+
+	installMore := promptYesNo("Install additional skills from URL/path?", false)
+	if !installMore {
+		fmt.Println()
+		return
+	}
+
+	fmt.Println()
+	fmt.Println("  Skill Install — add custom skills from GitHub or local path")
+	printBullet("Examples:")
+	printBullet("  https://github.com/user/my-skill")
+	printBullet("  /path/to/local/skill")
+	fmt.Println()
+
+	for {
+		source := strings.TrimSpace(promptString("Skill URL or path (Enter to finish)", ""))
+		if source == "" {
+			break
+		}
+
+		fmt.Printf("  ⏳ Installing from %s...\n", source)
+		if err := mgr.Install(source); err != nil {
+			fmt.Printf("  %s Install failed: %v\n", yellow("⚠"), err)
+			continue
+		}
+		fmt.Printf("  %s Skill installed successfully\n", green("✓"))
+	}
+
+	allSkills = mgr.LoadAll()
+	fmt.Printf("  %s Total skills: %d\n", green("✓"), len(allSkills))
+	fmt.Println()
 }

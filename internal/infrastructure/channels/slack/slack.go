@@ -119,6 +119,16 @@ func (s *SlackChannel) ReceiveMessages() <-chan *channel.Message {
 	return s.messages
 }
 
+// StartTyping is a no-op for Slack (no native typing API in Web API mode).
+func (s *SlackChannel) StartTyping(ctx context.Context, recipient string) error {
+	return nil
+}
+
+// StopTyping is a no-op for Slack.
+func (s *SlackChannel) StopTyping(ctx context.Context, recipient string) error {
+	return nil
+}
+
 // handleMessages handles incoming Slack messages via Socket Mode.
 func (s *SlackChannel) handleMessages(ctx context.Context) {
 	s.logger.Info("slack message handler started")

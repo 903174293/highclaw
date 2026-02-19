@@ -14,6 +14,7 @@ import (
 	"github.com/highclaw/highclaw/internal/domain/model"
 	"github.com/highclaw/highclaw/internal/gateway/protocol"
 	"github.com/highclaw/highclaw/internal/gateway/session"
+	"github.com/highclaw/highclaw/internal/skills"
 )
 
 // handleHealth returns the health status.
@@ -700,24 +701,29 @@ func (s *Server) handleListProviders(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"providers": providers})
 }
 
-// handleListSkills returns all discovered skills with their status.
+// handleListSkills 返回所有已发现的 user-defined skills
 func (s *Server) handleListSkills(c *gin.Context) {
-	if s.skills == nil {
-		c.JSON(http.StatusOK, gin.H{"skills": []any{}, "summary": map[string]int{}})
-		return
+	mgr := skills.NewManager(s.cfg.Agent.Workspace)
+	allSkills := mgr.LoadAll()
+
+	openSkillsCount := 0
+	workspaceCount := 0
+	for _, sk := range allSkills {
+		if sk.Source == "open-skills" {
+			openSkillsCount++
+		} else {
+			workspaceCount++
+		}
 	}
 
-	skills, err := s.skills.DiscoverSkills(c.Request.Context())
-	if err != nil {
-		s.logger.Error("failed to discover skills", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to discover skills: " + err.Error()})
-		return
+	summary := map[string]int{
+		"total":            len(allSkills),
+		"open_skills":      openSkillsCount,
+		"workspace_skills": workspaceCount,
 	}
-
-	summary, _ := s.skills.GetSkillsSummary(c.Request.Context())
 
 	c.JSON(http.StatusOK, gin.H{
-		"skills":  skills,
+		"skills":  allSkills,
 		"summary": summary,
 	})
 }

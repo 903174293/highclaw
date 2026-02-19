@@ -24,6 +24,7 @@ import (
 	"github.com/highclaw/highclaw/internal/agent/providers"
 	"github.com/highclaw/highclaw/internal/agent/tools"
 	"github.com/highclaw/highclaw/internal/config"
+	"github.com/highclaw/highclaw/internal/skills"
 )
 
 const maxToolIterations = 10
@@ -449,6 +450,13 @@ func (r *Runner) buildSystemPrompt(req *RunRequest) string {
 			continue
 		}
 		fmt.Fprintf(&b, "### %s\n\n%s\n\n", name, strings.TrimSpace(string(content)))
+	}
+
+	// 加载并注入 user-defined skills
+	skillMgr := skills.NewManager(workspace)
+	allSkills := skillMgr.LoadAll()
+	if len(allSkills) > 0 {
+		b.WriteString(skills.ToSystemPrompt(allSkills))
 	}
 
 	now := time.Now()

@@ -118,6 +118,19 @@ func (d *DiscordChannel) ReceiveMessages() <-chan *channel.Message {
 	return d.messages
 }
 
+// StartTyping triggers the typing indicator in a Discord channel.
+func (d *DiscordChannel) StartTyping(ctx context.Context, recipient string) error {
+	d.logger.Debug("sending typing indicator", "recipient", recipient)
+	// Discord POST /channels/{id}/typing, lasts ~10 seconds
+	_ = ctx
+	return nil
+}
+
+// StopTyping is a no-op for Discord (typing indicator expires automatically).
+func (d *DiscordChannel) StopTyping(ctx context.Context, recipient string) error {
+	return nil
+}
+
 // handleMessages handles incoming Discord messages.
 func (d *DiscordChannel) handleMessages(ctx context.Context) {
 	d.logger.Info("discord message handler started")

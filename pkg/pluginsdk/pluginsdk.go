@@ -20,6 +20,13 @@ type Channel interface {
 
 	// IsConnected returns whether the channel is currently connected.
 	IsConnected() bool
+
+	// StartTyping signals that the bot is processing a response.
+	// Platforms show a "typing..." indicator to the user.
+	StartTyping(ctx context.Context, recipient string) error
+
+	// StopTyping cancels any active typing indicator.
+	StopTyping(ctx context.Context, recipient string) error
 }
 
 // IncomingMessage represents a message received from a channel.

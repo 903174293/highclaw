@@ -10,8 +10,11 @@ import (
 	"github.com/highclaw/highclaw/internal/config"
 	"github.com/highclaw/highclaw/internal/domain/channel"
 	"github.com/highclaw/highclaw/internal/infrastructure/channels/discord"
+	"github.com/highclaw/highclaw/internal/infrastructure/channels/feishu"
 	"github.com/highclaw/highclaw/internal/infrastructure/channels/slack"
 	"github.com/highclaw/highclaw/internal/infrastructure/channels/telegram"
+	"github.com/highclaw/highclaw/internal/infrastructure/channels/wechat"
+	"github.com/highclaw/highclaw/internal/infrastructure/channels/wecom"
 	"github.com/highclaw/highclaw/internal/infrastructure/channels/whatsapp"
 )
 
@@ -77,6 +80,52 @@ func (m *Manager) Initialize(ctx context.Context) error {
 			AllowFrom: []string{},
 		}, m.logger)
 		m.registry.Register(sl)
+	}
+
+	// 初始化飞书 channel
+	if m.config.Channels.Feishu != nil && m.config.Channels.Feishu.AppID != "" {
+		m.logger.Info("initializing feishu channel")
+		fs := feishu.NewFeishuChannel(feishu.Config{
+			AppID:        m.config.Channels.Feishu.AppID,
+			AppSecret:    m.config.Channels.Feishu.AppSecret,
+			VerifyToken:  m.config.Channels.Feishu.VerifyToken,
+			EncryptKey:   m.config.Channels.Feishu.EncryptKey,
+			AllowedUsers: m.config.Channels.Feishu.AllowedUsers,
+			AllowedChats: m.config.Channels.Feishu.AllowedChats,
+			WebhookURL:   m.config.Channels.Feishu.WebhookURL,
+		}, m.logger)
+		m.registry.Register(fs)
+	}
+
+	// 初始化企业微信 channel
+	if m.config.Channels.WeCom != nil && m.config.Channels.WeCom.CorpID != "" {
+		m.logger.Info("initializing wecom channel")
+		wc := wecom.NewWeComChannel(wecom.Config{
+			CorpID:             m.config.Channels.WeCom.CorpID,
+			AgentID:            m.config.Channels.WeCom.AgentID,
+			Secret:             m.config.Channels.WeCom.Secret,
+			Token:              m.config.Channels.WeCom.Token,
+			EncodingAESKey:     m.config.Channels.WeCom.EncodingAESKey,
+			AllowedUsers:       m.config.Channels.WeCom.AllowedUsers,
+			AllowedDepartments: m.config.Channels.WeCom.AllowedDepartments,
+		}, m.logger)
+		m.registry.Register(wc)
+	}
+
+	// 初始化微信 channel
+	if m.config.Channels.WeChat != nil && (m.config.Channels.WeChat.AppID != "" || m.config.Channels.WeChat.PersonalBridgeURL != "") {
+		m.logger.Info("initializing wechat channel")
+		wx := wechat.NewWeChatChannel(wechat.Config{
+			Mode:                m.config.Channels.WeChat.Mode,
+			AppID:               m.config.Channels.WeChat.AppID,
+			AppSecret:           m.config.Channels.WeChat.AppSecret,
+			Token:               m.config.Channels.WeChat.Token,
+			EncodingAESKey:      m.config.Channels.WeChat.EncodingAESKey,
+			AllowedUsers:        m.config.Channels.WeChat.AllowedUsers,
+			PersonalBridgeURL:   m.config.Channels.WeChat.PersonalBridgeURL,
+			PersonalBridgeToken: m.config.Channels.WeChat.PersonalBridgeToken,
+		}, m.logger)
+		m.registry.Register(wx)
 	}
 
 	m.logger.Info("channels initialized", "count", len(m.registry.All()))
@@ -153,4 +202,3 @@ func (m *Manager) GetStatus() map[string]bool {
 
 	return status
 }
-

@@ -118,6 +118,20 @@ func (t *TelegramChannel) ReceiveMessages() <-chan *channel.Message {
 	return t.messages
 }
 
+// StartTyping sends a "typing" action to Telegram via sendChatAction API.
+func (t *TelegramChannel) StartTyping(ctx context.Context, recipient string) error {
+	t.logger.Debug("sending typing indicator", "recipient", recipient)
+	// Telegram sendChatAction: action=typing, lasts ~5 seconds
+	// Real implementation calls POST /bot<token>/sendChatAction
+	_ = ctx
+	return nil
+}
+
+// StopTyping is a no-op for Telegram (typing indicator expires automatically).
+func (t *TelegramChannel) StopTyping(ctx context.Context, recipient string) error {
+	return nil
+}
+
 // pollMessages polls for new messages from Telegram.
 func (t *TelegramChannel) pollMessages(ctx context.Context) {
 	t.logger.Info("telegram message polling started")

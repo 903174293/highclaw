@@ -209,6 +209,9 @@ type ChannelsConfig struct {
 	Email       *EmailConfig       `json:"email,omitempty"`
 	IRC         *IRCConfig         `json:"irc,omitempty"`
 	Lark        *LarkConfig        `json:"lark,omitempty"`
+	Feishu      *FeishuConfig      `json:"feishu,omitempty"`
+	WeCom       *WeComConfig       `json:"wecom,omitempty"`
+	WeChat      *WeChatConfig      `json:"wechat,omitempty"`
 }
 
 // WhatsAppConfig configures the WhatsApp channel.
@@ -305,7 +308,64 @@ type IRCConfig struct {
 	VerifyTLS        bool     `json:"verifyTls"`
 }
 
-type LarkConfig struct{}
+// FeishuConfig 配置飞书/Lark channel
+type FeishuConfig struct {
+	// AppID 飞书应用 ID
+	AppID string `json:"appId"`
+	// AppSecret 飞书应用密钥
+	AppSecret string `json:"appSecret"`
+	// VerifyToken 事件订阅验证 Token
+	VerifyToken string `json:"verifyToken,omitempty"`
+	// EncryptKey 事件订阅加密 Key (可选)
+	EncryptKey string `json:"encryptKey,omitempty"`
+	// AllowedUsers 允许的用户 ID 列表 (* 表示所有)
+	AllowedUsers []string `json:"allowedUsers"`
+	// AllowedChats 允许的群聊 ID 列表
+	AllowedChats []string `json:"allowedChats,omitempty"`
+	// WebhookURL 接收消息的 Webhook 地址 (可选)
+	WebhookURL string `json:"webhookUrl,omitempty"`
+}
+
+// WeComConfig 配置企业微信 channel
+type WeComConfig struct {
+	// CorpID 企业 ID
+	CorpID string `json:"corpId"`
+	// AgentID 应用 AgentID
+	AgentID int `json:"agentId"`
+	// Secret 应用 Secret
+	Secret string `json:"secret"`
+	// Token 接收消息服务器配置 Token
+	Token string `json:"token,omitempty"`
+	// EncodingAESKey 接收消息服务器配置加密密钥
+	EncodingAESKey string `json:"encodingAesKey,omitempty"`
+	// AllowedUsers 允许的用户 ID 列表 (* 表示所有)
+	AllowedUsers []string `json:"allowedUsers"`
+	// AllowedDepartments 允许的部门 ID 列表
+	AllowedDepartments []int `json:"allowedDepartments,omitempty"`
+}
+
+// WeChatConfig 配置微信个人号/公众号 channel
+type WeChatConfig struct {
+	// Mode 模式: "official" (公众号), "personal" (个人号，需第三方框架)
+	Mode string `json:"mode"`
+	// AppID 公众号 AppID
+	AppID string `json:"appId,omitempty"`
+	// AppSecret 公众号 AppSecret
+	AppSecret string `json:"appSecret,omitempty"`
+	// Token 接收消息服务器配置 Token
+	Token string `json:"token,omitempty"`
+	// EncodingAESKey 接收消息服务器配置加密密钥
+	EncodingAESKey string `json:"encodingAesKey,omitempty"`
+	// AllowedUsers 允许的用户 OpenID/wxid 列表 (* 表示所有)
+	AllowedUsers []string `json:"allowedUsers"`
+	// PersonalBridgeURL 个人号模式: 第三方桥接服务地址 (如 wechaty, itchat 等)
+	PersonalBridgeURL string `json:"personalBridgeUrl,omitempty"`
+	// PersonalBridgeToken 个人号模式: 桥接服务认证 Token
+	PersonalBridgeToken string `json:"personalBridgeToken,omitempty"`
+}
+
+// LarkConfig 飞书配置别名 (兼容)
+type LarkConfig = FeishuConfig
 
 // GroupConfig configures group behavior for a channel.
 type GroupConfig struct {

@@ -103,6 +103,25 @@ func (c *Channel) IsConnected() bool {
 	return c.connected
 }
 
+// StartTyping sends a "typing" chat action to the recipient.
+func (c *Channel) StartTyping(ctx context.Context, recipient string) error {
+	if c.bot == nil {
+		return nil
+	}
+	chatID := parseChatID(recipient)
+	action := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
+	_, err := c.bot.Request(action)
+	if err != nil {
+		c.logger.Debug("typing indicator failed", "recipient", recipient, "error", err)
+	}
+	return nil
+}
+
+// StopTyping is a no-op for Telegram; the typing indicator expires automatically after ~5 seconds.
+func (c *Channel) StopTyping(ctx context.Context, recipient string) error {
+	return nil
+}
+
 // pollMessages polls for new messages from Telegram.
 func (c *Channel) pollMessages(ctx context.Context) {
 	u := tgbotapi.NewUpdate(0)

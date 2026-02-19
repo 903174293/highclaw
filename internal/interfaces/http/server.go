@@ -16,7 +16,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/highclaw/highclaw/internal/agent"
-	skillapp "github.com/highclaw/highclaw/internal/application/skill"
 	"github.com/highclaw/highclaw/internal/config"
 	"github.com/highclaw/highclaw/internal/gateway/session"
 	"github.com/highclaw/highclaw/internal/security"
@@ -33,7 +32,6 @@ type Server struct {
 	upgrader  websocket.Upgrader
 	agent     *agent.Runner
 	sessions  *session.Manager
-	skills    *skillapp.Manager
 	logBuffer *LogBuffer
 	startedAt time.Time
 
@@ -54,7 +52,7 @@ type webSession struct {
 }
 
 // NewServer creates a new HTTP server.
-func NewServer(cfg *config.Config, logger *slog.Logger, runner *agent.Runner, sessions *session.Manager, skills *skillapp.Manager, logBuffer *LogBuffer) *Server {
+func NewServer(cfg *config.Config, logger *slog.Logger, runner *agent.Runner, sessions *session.Manager, logBuffer *LogBuffer) *Server {
 	// Set Gin mode
 	if cfg.Gateway.Mode == "production" {
 		gin.SetMode(gin.ReleaseMode)
@@ -73,7 +71,6 @@ func NewServer(cfg *config.Config, logger *slog.Logger, runner *agent.Runner, se
 		logger:    logger,
 		agent:     runner,
 		sessions:  sessions,
-		skills:    skills,
 		logBuffer: logBuffer,
 		startedAt: time.Now(),
 		pairing: security.NewPairingGuard(
