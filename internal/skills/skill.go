@@ -297,28 +297,25 @@ func (m *Manager) copyDir(src, dst string) error {
 	})
 }
 
-// ToSystemPrompt 将 skills 转换为 agent system prompt 片段
+// ToSystemPrompt 将 skills 转换为 agent system prompt 片段（仅摘要，按需加载完整内容）
 func ToSystemPrompt(skills []Skill) string {
 	if len(skills) == 0 {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("\n## Active Skills\n\n")
+	sb.WriteString("\n## Available Skills\n\n")
+	sb.WriteString("Skills are loaded on demand. Use `skill_read` tool with the skill name to get full instructions.\n\n")
+	sb.WriteString("<available_skills>\n")
 	for _, skill := range skills {
-		sb.WriteString(fmt.Sprintf("### %s (v%s)\n", skill.Name, skill.Version))
-		sb.WriteString(skill.Description + "\n")
-		if len(skill.Tools) > 0 {
-			sb.WriteString("Tools:\n")
-			for _, tool := range skill.Tools {
-				sb.WriteString(fmt.Sprintf("- **%s**: %s (%s)\n", tool.Name, tool.Description, tool.Kind))
-			}
+		sb.WriteString("  <skill>\n")
+		sb.WriteString(fmt.Sprintf("    <name>%s</name>\n", skill.Name))
+		sb.WriteString(fmt.Sprintf("    <description>%s</description>\n", skill.Description))
+		if skill.Location != "" {
+			sb.WriteString(fmt.Sprintf("    <location>%s</location>\n", skill.Location))
 		}
-		for _, prompt := range skill.Prompts {
-			sb.WriteString(prompt)
-			sb.WriteString("\n")
-		}
-		sb.WriteString("\n")
+		sb.WriteString("  </skill>\n")
 	}
+	sb.WriteString("</available_skills>\n\n")
 	return sb.String()
 }
 

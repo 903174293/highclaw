@@ -374,7 +374,6 @@ func (f *FeishuChannel) handleMessageEvent(ctx context.Context, event *larkim.P2
 		}
 		if reply != "" {
 			if thinkingMsgID != "" {
-				// 用实际回复替换"思考中"
 				if patchErr := f.patchMessage(bgCtx, thinkingMsgID, reply); patchErr != nil {
 					f.logger.Warn("feishu patch failed, falling back to new reply", "error", patchErr)
 					_ = f.replyText(bgCtx, messageID, reply)
@@ -382,6 +381,9 @@ func (f *FeishuChannel) handleMessageEvent(ctx context.Context, event *larkim.P2
 			} else {
 				_ = f.replyText(bgCtx, messageID, reply)
 			}
+		} else if thinkingMsgID != "" {
+			// AI 返回空回复，清除残留的"思考中"占位消息
+			_ = f.patchMessage(bgCtx, thinkingMsgID, "(no response)")
 		}
 	}()
 

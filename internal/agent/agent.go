@@ -30,6 +30,11 @@ import (
 const maxToolIterations = 10
 
 const (
+	// bootstrap 文件截断限制（参考 ZeroClaw/OpenClaw 的 20,000 字符上限）
+	bootstrapMaxChars    = 20000
+	bootstrapHeadRatio   = 0.7
+	bootstrapTailRatio   = 0.2
+
 	maxHistoryMessages            = 50
 	compactionKeepRecent          = 20
 	compactionMaxSourceChars      = 12000
@@ -98,6 +103,21 @@ func truncateWithEllipsis(input string, maxChars int) string {
 		return string(runes[:maxChars])
 	}
 	return string(runes[:maxChars-1]) + "…"
+}
+
+// truncateBootstrap 截断过长的 bootstrap 文件（保留 head 70% + tail 20%，中间插入截断标记）
+func truncateBootstrap(content, filename string, maxChars int) string {
+	runes := []rune(content)
+	if len(runes) <= maxChars {
+		return content
+	}
+	headChars := int(float64(maxChars) * bootstrapHeadRatio)
+	tailChars := int(float64(maxChars) * bootstrapTailRatio)
+	head := string(runes[:headChars])
+	tail := string(runes[len(runes)-tailChars:])
+	marker := fmt.Sprintf("\n\n[...truncated, use `read` for full %s — kept %d+%d chars of %d...]\n\n",
+		filename, headChars, tailChars, len(runes))
+	return head + marker + tail
 }
 
 func trimHistory(history []ChatMessage) []ChatMessage {
@@ -252,6 +272,7 @@ type TokenUsage struct {
 
 // Run executes an agent session — send message, get response, execute tools.
 func (r *Runner) Run(ctx context.Context, req *RunRequest) (*RunResult, error) {
+	runStart := time.Now()
 	r.logger.Debug("agent run",
 		"session", req.SessionKey,
 		"channel", req.Channel,
@@ -259,7 +280,9 @@ func (r *Runner) Run(ctx context.Context, req *RunRequest) (*RunResult, error) {
 	)
 
 	// 1. Build system prompt.
+	t0 := time.Now()
 	systemPrompt := r.buildSystemPrompt(req)
+	r.logger.Debug("perf: buildSystemPrompt", "ms", time.Since(t0).Milliseconds(), "prompt_len", len(systemPrompt))
 	channel := strings.TrimSpace(req.Channel)
 	if channel == "" {
 		channel = "cli"
@@ -286,9 +309,11 @@ func (r *Runner) Run(ctx context.Context, req *RunRequest) (*RunResult, error) {
 		}
 		_ = r.tools.memory.store(autosaveMemoryKey("user_msg"), userMessage, "conversation", meta)
 	}
+	t1 := time.Now()
 	if ctxText := buildMemoryContext(r.tools, userMessage, req.SessionKey); ctxText != "" {
 		req.Message = ctxText + req.Message
 	}
+	r.logger.Debug("perf: buildMemoryContext", "ms", time.Since(t1).Milliseconds())
 
 	// 2. Run ZeroClaw-style tool loop.
 	history := make([]ChatMessage, 0, len(req.History)+1)
@@ -313,8 +338,10 @@ func (r *Runner) Run(ctx context.Context, req *RunRequest) (*RunResult, error) {
 	// 注意：不再覆盖历史中的最后一条用户消息
 	// commands.go 已经把新消息追加到 history 中了
 	var totalUsage TokenUsage
+	t2 := time.Now()
 	history = autoCompactHistory(ctx, history, r.models, strings.TrimSpace(req.Provider), strings.TrimSpace(req.Model))
 	history = trimHistory(history)
+	r.logger.Debug("perf: autoCompactHistory", "ms", time.Since(t2).Milliseconds(), "history_len", len(history))
 
 	for i := 0; i < maxToolIterations; i++ {
 		modelStart := time.Now()
@@ -330,6 +357,10 @@ func (r *Runner) Run(ctx context.Context, req *RunRequest) (*RunResult, error) {
 			return nil, err
 		}
 		modelLatency := time.Since(modelStart)
+		r.logger.Debug("perf: models.Chat", "ms", modelLatency.Milliseconds(),
+			"input_tokens", modelResp.Usage.InputTokens,
+			"output_tokens", modelResp.Usage.OutputTokens,
+			"total_ms_since_run_start", time.Since(runStart).Milliseconds())
 		totalUsage.merge(modelResp.Usage)
 
 		text, toolCalls := parseToolCalls(modelResp.Content)
@@ -445,11 +476,18 @@ func (r *Runner) buildSystemPrompt(req *RunRequest) string {
 		"USER.md", "TOOLS.md", "BOOTSTRAP.md", "MEMORY.md",
 	} {
 		path := filepath.Join(workspace, name)
-		content, err := os.ReadFile(path)
+		raw, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
-		fmt.Fprintf(&b, "### %s\n\n%s\n\n", name, strings.TrimSpace(string(content)))
+		trimmed := strings.TrimSpace(string(raw))
+		if trimmed == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "### %s\n\n", name)
+		truncated := truncateBootstrap(trimmed, name, bootstrapMaxChars)
+		b.WriteString(truncated)
+		b.WriteString("\n\n")
 	}
 
 	// 加载并注入 user-defined skills
@@ -471,7 +509,24 @@ func (r *Runner) buildSystemPrompt(req *RunRequest) string {
 		modelName = strings.TrimSpace(r.cfg.Agent.Model)
 	}
 	fmt.Fprintf(&b, "## Runtime\n\nHost: %s | OS: %s | Model: %s\n", host, runtime.GOOS, modelName)
-	return b.String()
+	prompt := b.String()
+
+	// token 监测：按 ~4 chars/token 估算各段开销
+	promptRunes := len([]rune(prompt))
+	estTokens := promptRunes / 4
+	skillsText := ""
+	if len(allSkills) > 0 {
+		skillsText = skills.ToSystemPrompt(allSkills)
+	}
+	r.logger.Info("prompt-budget",
+		"total_chars", promptRunes,
+		"est_tokens", estTokens,
+		"skills_count", len(allSkills),
+		"skills_chars", len([]rune(skillsText)),
+		"tools_count", len(r.tools.Specs()),
+	)
+
+	return prompt
 }
 
 // ModelManager handles model provider selection and API calls.
@@ -1520,6 +1575,16 @@ func NewToolRegistry(cfg *config.Config, logger *slog.Logger) *ToolRegistry {
 	reg.Register("memory_recall", "Search memory and return matching entries.", `{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"]}`, reg.memoryRecallTool())
 	reg.Register("memory_forget", "Delete a memory entry by key.", `{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}`, reg.memoryForgetTool())
 
+	// skill_read: 按需读取完整 SKILL.md 内容
+	workspace := strings.TrimSpace(cfg.Agent.Workspace)
+	if workspace == "" {
+		workspace = filepath.Join(config.ConfigDir(), "workspace")
+	}
+	skillMgr := skills.NewManager(workspace)
+	reg.Register("skill_read", "Read full SKILL.md content for a skill by name. Use when a skill from <available_skills> is relevant to the user request.",
+		`{"type":"object","properties":{"name":{"type":"string","description":"Skill name from <available_skills>"}},"required":["name"]}`,
+		skillReadTool(skillMgr))
+
 	return reg
 }
 
@@ -1679,6 +1744,47 @@ func (r *ToolRegistry) memoryForgetTool() ToolHandler {
 		r.logger.Info("memory forget no-op", "key", key)
 		return fmt.Sprintf("No memory found with key: %s", key), nil
 	}
+}
+
+// skillReadTool 返回按需读取 SKILL.md 完整内容的 tool handler
+func skillReadTool(mgr *skills.Manager) ToolHandler {
+	return func(ctx context.Context, input string) (string, error) {
+		_ = ctx
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(input), &payload); err != nil {
+			return "", fmt.Errorf("invalid skill_read input: %w", err)
+		}
+		name := strings.TrimSpace(stringValue(payload["name"]))
+		if name == "" {
+			return "", fmt.Errorf("missing 'name' parameter")
+		}
+		allSkills := mgr.LoadAll()
+		for _, s := range allSkills {
+			if strings.EqualFold(s.Name, name) {
+				if len(s.Prompts) > 0 {
+					return s.Prompts[0], nil
+				}
+				if s.Location != "" {
+					data, err := os.ReadFile(s.Location)
+					if err != nil {
+						return "", fmt.Errorf("read skill file: %w", err)
+					}
+					return string(data), nil
+				}
+				return fmt.Sprintf("Skill '%s' found but has no content", name), nil
+			}
+		}
+		return fmt.Sprintf("Skill '%s' not found. Available: %s", name, skillNameList(allSkills)), nil
+	}
+}
+
+// skillNameList 返回所有 skill 名称的逗号分隔列表
+func skillNameList(all []skills.Skill) string {
+	names := make([]string, len(all))
+	for i, s := range all {
+		names[i] = s.Name
+	}
+	return strings.Join(names, ", ")
 }
 
 func stringValue(v any) string {
