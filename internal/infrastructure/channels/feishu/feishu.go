@@ -55,6 +55,7 @@ type FeishuChannel struct {
 	logger    *slog.Logger
 	apiClient *lark.Client
 	wsClient  *larkws.Client
+	cancelWs  context.CancelFunc
 
 	mu          sync.RWMutex
 	connected   bool
@@ -62,14 +63,20 @@ type FeishuChannel struct {
 	boundUserID string
 	bindCode    string
 
+	// 消息去重（防 SDK 重连后平台重投）
+	seenMsgMu      sync.Mutex
+	seenMsgs       map[string]time.Time
+	seenLastCleanup time.Time
+
 	onMessage MessageHandler
 }
 
 // NewFeishuChannel 创建飞书 channel 实例
 func NewFeishuChannel(config Config, logger *slog.Logger) *FeishuChannel {
 	return &FeishuChannel{
-		config: config,
-		logger: logger,
+		config:   config,
+		logger:   logger,
+		seenMsgs: make(map[string]time.Time, 64),
 	}
 }
 
@@ -134,6 +141,10 @@ func (f *FeishuChannel) Start(ctx context.Context) error {
 	eventHandler := dispatcher.NewEventDispatcher(f.config.VerifyToken, f.config.EncryptKey).
 		OnP2MessageReceiveV1(f.handleMessageEvent)
 
+	// 创建带取消能力的 context，用于 Stop 时终止重连
+	wsCtx, cancel := context.WithCancel(ctx)
+	f.cancelWs = cancel
+
 	// 创建 WebSocket 长连接客户端
 	f.wsClient = larkws.NewClient(f.config.AppID, f.config.AppSecret,
 		larkws.WithEventHandler(eventHandler),
@@ -143,23 +154,24 @@ func (f *FeishuChannel) Start(ctx context.Context) error {
 	// Start() 是阻塞式的，放后台 goroutine
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- f.wsClient.Start(ctx)
+		errCh <- f.wsClient.Start(wsCtx)
 	}()
 
 	// 等 3 秒检测是否立即失败（如凭证错误）
 	select {
 	case err := <-errCh:
+		cancel()
 		return fmt.Errorf("feishu connection failed: %w", err)
 	case <-time.After(3 * time.Second):
 	}
 
 	f.connected = true
 
-	// 输出连接状态
+	// 输出连接状态 banner（含配置详情）
 	if f.bound {
-		printFeishuBanner("reconnected", "", f.boundUserID)
+		printFeishuBanner("reconnected", f.config, "", f.boundUserID)
 	} else {
-		printFeishuBanner("waiting_bind", f.bindCode, "")
+		printFeishuBanner("waiting_bind", f.config, f.bindCode, "")
 	}
 
 	return nil
@@ -173,6 +185,16 @@ func (f *FeishuChannel) Stop(_ context.Context) error {
 		return nil
 	}
 	f.connected = false
+
+	// 取消 WebSocket context，阻止 SDK 重连
+	if f.cancelWs != nil {
+		f.cancelWs()
+		f.cancelWs = nil
+	}
+
+	// 输出断开 banner
+	printFeishuBanner("stopped", f.config, "", "")
+
 	return nil
 }
 
@@ -190,7 +212,7 @@ func (f *FeishuChannel) IsBound() bool {
 	return f.bound
 }
 
-// handleMessageEvent SDK 事件回调入口：解析消息 -> bind 流程 -> 业务处理
+// handleMessageEvent SDK 事件回调入口：解析消息 -> 去重 -> 连接检查 -> bind 流程 -> 业务处理
 func (f *FeishuChannel) handleMessageEvent(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
 	if event == nil || event.Event == nil || event.Event.Message == nil {
 		return nil
@@ -221,12 +243,64 @@ func (f *FeishuChannel) handleMessageEvent(ctx context.Context, event *larkim.P2
 	chatType := ptrStr(msg.ChatType)
 	messageID := ptrStr(msg.MessageId)
 
+	// 连接状态检查：channel 已停止时丢弃消息
+	f.mu.RLock()
+	conn := f.connected
+	f.mu.RUnlock()
+	if !conn {
+		slog.Debug("feishu: message dropped (channel disconnected)",
+			"messageId", messageID,
+			"sender", maskID(senderID))
+		return nil
+	}
+
+	// 消息去重（30min TTL + 1000 上限，防 SDK 重连后平台重投）
+	if messageID != "" {
+		f.seenMsgMu.Lock()
+		now := time.Now()
+		if ts, dup := f.seenMsgs[messageID]; dup && now.Sub(ts) < 30*time.Minute {
+			f.seenMsgMu.Unlock()
+			f.logger.Debug("feishu: duplicate message ignored", "messageId", messageID)
+			return nil
+		}
+		f.seenMsgs[messageID] = now
+		// 周期清理：每 5 分钟清理过期条目
+		if now.Sub(f.seenLastCleanup) > 5*time.Minute {
+			for k, ts := range f.seenMsgs {
+				if now.Sub(ts) > 30*time.Minute {
+					delete(f.seenMsgs, k)
+				}
+			}
+			// 超过 1000 条强制截断最旧的
+			if len(f.seenMsgs) > 1000 {
+				var oldest string
+				var oldestTs time.Time
+				first := true
+				for k, ts := range f.seenMsgs {
+					if first || ts.Before(oldestTs) {
+						oldest = k
+						oldestTs = ts
+						first = false
+					}
+				}
+				if oldest != "" {
+					delete(f.seenMsgs, oldest)
+				}
+			}
+			f.seenLastCleanup = now
+		}
+		f.seenMsgMu.Unlock()
+	}
+
 	// bind 验证流程
 	f.mu.RLock()
 	bound := f.bound
 	f.mu.RUnlock()
 
 	if !bound {
+		f.logger.Info("feishu: unbound, entering bind flow",
+			"messageId", messageID,
+			"sender", maskID(senderID))
 		return f.handleBind(ctx, messageID, senderID, text)
 	}
 
@@ -263,6 +337,10 @@ func (f *FeishuChannel) handleMessageEvent(ctx context.Context, event *larkim.P2
 		Text:      text,
 	}
 
+	f.logger.Info("feishu: message accepted, dispatching to AI",
+		"messageId", messageID,
+		"sender", maskID(senderID))
+
 	// 异步处理，避免阻塞 SDK 事件循环
 	go func() {
 		reply, err := f.onMessage(context.Background(), parsed)
@@ -289,12 +367,17 @@ func (f *FeishuChannel) handleBind(ctx context.Context, messageID, senderID, tex
 	}
 
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	// 防止空 bindCode 意外匹配
+	matched := f.bindCode != "" && strings.EqualFold(code, f.bindCode)
+	f.mu.Unlock()
 
-	if strings.EqualFold(code, f.bindCode) {
+	if matched {
+		f.mu.Lock()
 		f.bound = true
 		f.boundUserID = senderID
 		f.bindCode = ""
+		f.mu.Unlock()
+
 		f.logger.Info("feishu bind successful", "sender", maskID(senderID))
 
 		_ = f.saveBindState(bindState{
@@ -412,29 +495,57 @@ func (f *FeishuChannel) isChatAllowed(chatID string) bool {
 
 // ============ stdout 醒目输出 ============
 
-// printFeishuBanner 在终端输出醒目的飞书状态信息（非日志，直接 stdout）
-func printFeishuBanner(status, bindCode, boundUser string) {
+// printFeishuBanner 在终端输出醒目的飞书状态 banner（含配置详情）
+func printFeishuBanner(status string, cfg Config, bindCode, boundUser string) {
 	const (
 		green  = "\033[32m"
+		red    = "\033[31m"
 		yellow = "\033[33m"
 		cyan   = "\033[36m"
+		gray   = "\033[90m"
 		bold   = "\033[1m"
 		reset  = "\033[0m"
 	)
+
+	// 格式化 appId（脱敏）
+	maskedAppID := maskID(cfg.AppID)
+	// 格式化 users 信息
+	usersStr := "bind-only"
+	if len(cfg.AllowedUsers) > 0 {
+		if len(cfg.AllowedUsers) == 1 && cfg.AllowedUsers[0] == "*" {
+			usersStr = "* (all)"
+		} else {
+			usersStr = fmt.Sprintf("%d user(s)", len(cfg.AllowedUsers))
+		}
+	}
 
 	fmt.Println()
 	fmt.Println(cyan + "  ╔══════════════════════════════════════════════╗" + reset)
 	switch status {
 	case "waiting_bind":
-		fmt.Println(cyan + "  ║" + reset + bold + "  Feishu Bot Connected (waiting for bind)     " + cyan + "║" + reset)
+		fmt.Println(cyan + "  ║" + reset + bold + "  🐦 Feishu Bot Connected (waiting for bind)  " + cyan + "║" + reset)
 		fmt.Println(cyan + "  ║" + reset + "                                              " + cyan + "║" + reset)
-		fmt.Println(cyan + "  ║" + reset + "  Bind code: " + yellow + bold + bindCode + reset + "                              " + cyan + "║" + reset)
-		fmt.Println(cyan + "  ║" + reset + "  Send to bot: " + green + "bind " + bindCode + reset + "                     " + cyan + "║" + reset)
+		fmt.Println(cyan + "  ║" + reset + gray + "  type:  feishu-ws                            " + reset + cyan + "║" + reset)
+		fmt.Println(cyan + "  ║" + reset + gray + "  appId: " + maskedAppID + strings.Repeat(" ", 37-len(maskedAppID)) + reset + cyan + "║" + reset)
+		fmt.Println(cyan + "  ║" + reset + gray + "  users: " + usersStr + strings.Repeat(" ", 37-len(usersStr)) + reset + cyan + "║" + reset)
+		fmt.Println(cyan + "  ║" + reset + "                                              " + cyan + "║" + reset)
+		fmt.Println(cyan + "  ║" + reset + "  Bind code: " + yellow + bold + bindCode + reset + strings.Repeat(" ", 33-len(bindCode)) + cyan + "║" + reset)
+		fmt.Println(cyan + "  ║" + reset + "  Send to bot: " + green + "bind " + bindCode + reset + strings.Repeat(" ", 26-len(bindCode)) + cyan + "║" + reset)
 	case "reconnected":
-		fmt.Println(cyan + "  ║" + reset + bold + green + "  Feishu Bot Reconnected                      " + reset + cyan + "║" + reset)
+		fmt.Println(cyan + "  ║" + reset + bold + green + "  🐦 Feishu Bot Reconnected                   " + reset + cyan + "║" + reset)
+		fmt.Println(cyan + "  ║" + reset + "                                              " + cyan + "║" + reset)
+		fmt.Println(cyan + "  ║" + reset + gray + "  type:  feishu-ws                            " + reset + cyan + "║" + reset)
+		fmt.Println(cyan + "  ║" + reset + gray + "  appId: " + maskedAppID + strings.Repeat(" ", 37-len(maskedAppID)) + reset + cyan + "║" + reset)
+		fmt.Println(cyan + "  ║" + reset + gray + "  users: " + usersStr + strings.Repeat(" ", 37-len(usersStr)) + reset + cyan + "║" + reset)
 		if boundUser != "" {
-			fmt.Println(cyan + "  ║" + reset + "  Bound user: " + maskID(boundUser) + "                       " + cyan + "║" + reset)
+			bu := maskID(boundUser)
+			fmt.Println(cyan + "  ║" + reset + gray + "  bound: " + bu + strings.Repeat(" ", 37-len(bu)) + reset + cyan + "║" + reset)
 		}
+	case "stopped":
+		fmt.Println(cyan + "  ║" + reset + bold + red + "  🐦 Feishu Bot Disconnected                  " + reset + cyan + "║" + reset)
+		fmt.Println(cyan + "  ║" + reset + "                                              " + cyan + "║" + reset)
+		fmt.Println(cyan + "  ║" + reset + gray + "  type:  feishu-ws                            " + reset + cyan + "║" + reset)
+		fmt.Println(cyan + "  ║" + reset + gray + "  appId: " + maskedAppID + strings.Repeat(" ", 37-len(maskedAppID)) + reset + cyan + "║" + reset)
 	}
 	fmt.Println(cyan + "  ╚══════════════════════════════════════════════╝" + reset)
 	fmt.Println()
@@ -457,7 +568,6 @@ func truncateText(s string, maxLen int) string {
 	}
 	return string(r[:maxLen]) + "..."
 }
-
 
 func maskID(s string) string {
 	if len(s) < 10 {

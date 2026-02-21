@@ -102,6 +102,13 @@ func runWizard(cfg *config.Config) error {
 	fmt.Println("  This wizard will configure your agent in under 60 seconds.")
 	fmt.Println()
 
+	if isGatewayRunning(cfg) {
+		fmt.Printf("    🟢 Process:       %s\n", green(fmt.Sprintf("running (port %d)", cfg.Gateway.Port)))
+	} else {
+		fmt.Printf("    ⚪ Process:       %s\n", gray("not running"))
+	}
+	fmt.Println()
+
 	printStep(1, 9, "Workspace Setup")
 	workspace := setupWorkspace()
 	cfg.Agent.Workspace = workspace
@@ -234,6 +241,15 @@ func runQuickSetup(cfg *config.Config) error {
 	check := green("✓")
 	fmt.Printf("  %s Created %s files, skipped %s existing | %s subdirectories\n", check, green(fmt.Sprintf("%d", createdFiles)), gray(fmt.Sprintf("%d", skippedFiles)), green("5"))
 	printWorkspaceTree(ws)
+
+	// 进程状态（在 Workspace 信息上方）
+	if isGatewayRunning(cfg) {
+		fmt.Printf("    🟢 Process:       %s\n", green(fmt.Sprintf("running (port %d)", cfg.Gateway.Port)))
+	} else {
+		fmt.Printf("    ⚪ Process:       %s\n", gray("not running"))
+	}
+	fmt.Println()
+
 	fmt.Printf("  %s Workspace:  %s\n", check, green(ws))
 	fmt.Printf("  %s Provider:   %s\n", check, green(provider))
 	fmt.Printf("  %s Model:      %s\n", check, green(model))
@@ -248,14 +264,66 @@ func runQuickSetup(cfg *config.Config) error {
 	fmt.Printf("  %s Gateway:    %s\n", check, green(fmt.Sprintf("pairing required (127.0.0.1:%d)", cfg.Gateway.Port)))
 	fmt.Printf("  %s Tunnel:     %s\n", check, gray("none (local only)"))
 	fmt.Printf("  %s Composio:   %s\n", check, gray("disabled (sovereign mode)"))
+	fmt.Printf("  %s Channels:   %s\n", check, green(channelsSummary(cfg.Channels)))
 	fmt.Println()
 	fmt.Printf("  %s %s\n", bold("Config saved:"), green(config.ConfigPath()))
 	fmt.Println()
-	fmt.Println("  " + bold("Next steps:"))
-	fmt.Printf("    1. Set your API key:  %s\n", magenta(fmt.Sprintf("export %s=\"sk-...\"", providerEnvVar(provider))))
-	fmt.Printf("    2. Or edit:           %s\n", magenta("~/.highclaw/config.yaml"))
-	fmt.Printf("    3. Chat:              %s\n", magenta("highclaw agent -m \"Hello!\""))
-	fmt.Printf("    4. Gateway:           %s\n", magenta("highclaw gateway"))
+
+	gatewayRunning := isGatewayRunning(cfg)
+	hasChannels := hasConfiguredChannels(cfg.Channels)
+
+	if gatewayRunning {
+		fmt.Printf("  ⚠️  %s\n", bold("Gateway is running — new config will reload automatically"))
+		fmt.Println()
+		fmt.Println("  " + bold("Try now:"))
+		fmt.Println()
+		if hasChannels {
+			fmt.Printf("    %s Send a message to chat\n", cyan("1."))
+		} else {
+			fmt.Printf("    %s Add a channel and send a bind verification code message to chat\n", cyan("1."))
+		}
+		fmt.Println("       📱 Telegram   💬 Discord    🔔 Slack")
+		fmt.Println("       💻 iMessage   🔗 Matrix     📞 WhatsApp")
+		fmt.Println("       📧 IRC        🌐 Webhook    🐦 Feishu")
+		fmt.Println("       🏢 WeCom     💚 WeChat")
+		fmt.Println()
+		fmt.Printf("    %s Start interactive TUI mode:\n", cyan("2."))
+		fmt.Printf("       %s\n", magenta("highclaw tui"))
+		fmt.Println()
+		fmt.Printf("    %s Check full status:\n", cyan("3."))
+		fmt.Printf("       %s\n", magenta("highclaw status"))
+		fmt.Println()
+		fmt.Printf("    %s Key APIs %s:\n", cyan("4."), gray(fmt.Sprintf("(localhost:%d)", cfg.Gateway.Port)))
+		fmt.Printf("       🔌 %s  — AI conversation\n", magenta("POST /api/chat"))
+		fmt.Printf("       📊 %s — system status\n", magenta("GET  /api/status"))
+		fmt.Printf("       🔄 %s — channel health\n", magenta("GET  /api/channels/status"))
+		fmt.Println()
+	} else {
+		fmt.Println("  " + bold("Next steps:"))
+		fmt.Println()
+		step := 1
+		if strings.TrimSpace(onboardAPIKey) == "" {
+			fmt.Printf("    %s Set your API key:\n", cyan(fmt.Sprintf("%d.", step)))
+			fmt.Printf("       %s\n\n", magenta(fmt.Sprintf("export %s=\"sk-...\"", providerEnvVar(provider))))
+			step++
+		}
+		fmt.Printf("    %s Send a quick message:\n", cyan(fmt.Sprintf("%d.", step)))
+		fmt.Printf("       %s\n", magenta("highclaw agent -m \"Hello, HighClaw!\""))
+		fmt.Println()
+		step++
+		fmt.Printf("    %s Start interactive CLI mode:\n", cyan(fmt.Sprintf("%d.", step)))
+		fmt.Printf("       %s\n", magenta("highclaw agent"))
+		fmt.Println()
+		step++
+		fmt.Printf("    %s Check full status:\n", cyan(fmt.Sprintf("%d.", step)))
+		fmt.Printf("       %s\n", magenta("highclaw status"))
+		fmt.Println()
+		step++
+		fmt.Printf("    %s Start the gateway (channels + AI + API):\n", cyan(fmt.Sprintf("%d.", step)))
+		fmt.Printf("       %s\n", magenta("highclaw gateway"))
+		fmt.Println()
+	}
+	fmt.Println("  ⚡ Happy hacking! 🦀")
 	fmt.Println()
 
 	return nil
@@ -635,7 +703,7 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 			}
 			verifyToken := strings.TrimSpace(promptString("Verification Token (optional)", ""))
 			encryptKey := strings.TrimSpace(promptString("Encrypt Key (optional)", ""))
-			users := parseCSV(promptString("Allowed user IDs (comma-separated, * for all)", "*"))
+			users := parseCSV(promptString("Allowed user IDs (comma-separated, * for all, Enter to skip)", ""))
 			out.Feishu = &config.FeishuConfig{
 				AppID:        appID,
 				AppSecret:    appSecret,
@@ -662,7 +730,7 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 			agentID, _ := strconv.Atoi(agentIDStr)
 			token := strings.TrimSpace(promptString("Token (optional)", ""))
 			encodingKey := strings.TrimSpace(promptString("EncodingAESKey (optional)", ""))
-			users := parseCSV(promptString("Allowed user IDs (comma-separated, * for all)", "*"))
+			users := parseCSV(promptString("Allowed user IDs (comma-separated, * for all, Enter to skip)", ""))
 			out.WeCom = &config.WeComConfig{
 				CorpID:         corpID,
 				AgentID:        agentID,
@@ -1084,7 +1152,7 @@ func modelsForProvider(provider string) []modelOpt {
 	case "glm", "zhipu", "zai", "z.ai":
 		return []modelOpt{{"glm-5", "GLM-5 (latest)"}, {"glm-4-plus", "GLM-4 Plus (flagship)"}, {"glm-4-flash", "GLM-4 Flash (fast)"}}
 	case "minimax":
-		return []modelOpt{{"abab6.5s-chat", "ABAB 6.5s Chat"}, {"abab6.5-chat", "ABAB 6.5 Chat"}}
+		return []modelOpt{{"MiniMax-M2.5", "MiniMax M2.5 (reasoning)"}, {"MiniMax-M2.5-Lightning", "MiniMax M2.5 Lightning (fast reasoning)"}, {"MiniMax-M2.1", "MiniMax M2.1"}, {"MiniMax-M2.1-lightning", "MiniMax M2.1 Lightning (fast)"}}
 	case "ollama":
 		return []modelOpt{{"llama3.2", "Llama 3.2 (recommended local)"}, {"mistral", "Mistral 7B"}, {"codellama", "Code Llama"}, {"phi3", "Phi-3 (small, fast)"}}
 	case "gemini", "google", "google-gemini":

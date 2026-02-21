@@ -877,6 +877,8 @@ func defaultBaseURLForProvider(provider string) string {
 		return "https://aip.baidubce.com"
 	case "opencode", "opencode-zen":
 		return "https://api.opencode.ai"
+	case "minimax":
+		return "https://api.minimax.chat/v1"
 	case "grok":
 		return "https://api.x.ai"
 	case "gemini":
