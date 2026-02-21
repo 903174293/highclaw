@@ -116,17 +116,44 @@ func (s *Server) handlePairingStatus(c *gin.Context) {
 	})
 }
 
-// handleGetConfig returns the current configuration.
+// handleGetConfig 返回当前配置（脱敏）+ 配置 hash（用于乐观锁）
 func (s *Server) handleGetConfig(c *gin.Context) {
-	c.JSON(http.StatusOK, s.publicConfig())
+	cfg := s.configCache.Get()
+	cp := redactConfig(cfg)
+	c.JSON(http.StatusOK, gin.H{
+		"config": cp,
+		"hash":   s.configCache.Hash(),
+	})
 }
 
-// handlePatchConfig updates the configuration.
+// handlePatchConfig 增量更新配置，支持 baseHash 乐观锁防并发冲突
 func (s *Server) handlePatchConfig(c *gin.Context) {
-	var patch map[string]json.RawMessage
-	if err := c.BindJSON(&patch); err != nil {
+	var req struct {
+		BaseHash string                       `json:"baseHash"`
+		Patch    map[string]json.RawMessage   `json:"patch"`
+	}
+	if err := c.BindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	// 兼容旧格式：如果 patch 为空，尝试把整个 body 作为 patch
+	patch := req.Patch
+	if len(patch) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "patch is required"})
+		return
+	}
+
+	// 乐观锁：如果提供了 baseHash，检查是否与当前一致
+	if req.BaseHash != "" {
+		currentHash := s.configCache.Hash()
+		if req.BaseHash != currentHash {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":       "config changed since last load, re-fetch and retry",
+				"currentHash": currentHash,
+			})
+			return
+		}
 	}
 
 	// Apply patches to config fields.
@@ -270,13 +297,20 @@ func (s *Server) handlePatchConfig(c *gin.Context) {
 		}
 	}
 
-	// Save to disk
+	// 原子写入磁盘
 	if err := config.Save(s.cfg); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save config: " + err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "config updated", "config": s.publicConfig()})
+	// 刷新缓存，使后续请求立即读到最新配置
+	s.configCache.Set(s.cfg)
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "config updated",
+		"config":  redactConfig(s.cfg),
+		"hash":    s.configCache.Hash(),
+	})
 }
 
 func (s *Server) handleMeta(c *gin.Context) {
@@ -309,10 +343,15 @@ func (s *Server) handleMeta(c *gin.Context) {
 }
 
 func (s *Server) publicConfig() *config.Config {
-	if s.cfg == nil {
+	return redactConfig(s.cfg)
+}
+
+// redactConfig 对敏感字段脱敏后返回副本
+func redactConfig(cfg *config.Config) *config.Config {
+	if cfg == nil {
 		return &config.Config{}
 	}
-	cp := *s.cfg
+	cp := *cfg
 	cp.Gateway.Auth.Token = ""
 	cp.Gateway.Auth.Password = ""
 	cp.Web.Auth.Password = ""
@@ -324,11 +363,38 @@ func (s *Server) publicConfig() *config.Config {
 		}
 		cp.Agent.Providers = redacted
 	}
-	cp.Channels.Telegram.BotToken = ""
-	cp.Channels.Discord.Token = ""
-	cp.Channels.Slack.BotToken = ""
-	cp.Channels.Slack.AppToken = ""
-	cp.Channels.BlueBubbles.Password = ""
+	if cp.Channels.Telegram != nil {
+		t := *cp.Channels.Telegram
+		t.BotToken = ""
+		cp.Channels.Telegram = &t
+	}
+	if cp.Channels.Discord != nil {
+		d := *cp.Channels.Discord
+		d.Token = ""
+		cp.Channels.Discord = &d
+	}
+	if cp.Channels.Slack != nil {
+		sl := *cp.Channels.Slack
+		sl.BotToken = ""
+		sl.AppToken = ""
+		cp.Channels.Slack = &sl
+	}
+	if cp.Channels.BlueBubbles != nil {
+		bb := *cp.Channels.BlueBubbles
+		bb.Password = ""
+		cp.Channels.BlueBubbles = &bb
+	}
+	if cp.Channels.Feishu != nil {
+		f := *cp.Channels.Feishu
+		f.AppSecret = ""
+		f.EncryptKey = ""
+		cp.Channels.Feishu = &f
+	}
+	if cp.Channels.WeCom != nil {
+		w := *cp.Channels.WeCom
+		w.Secret = ""
+		cp.Channels.WeCom = &w
+	}
 	return &cp
 }
 
@@ -776,4 +842,26 @@ func boolToStatus(configured bool) string {
 		return "configured"
 	}
 	return "disconnected"
+}
+
+// SetReloadChannels 注入 channel reload 回调（gateway 启动时调用）
+func (s *Server) SetReloadChannels(fn ReloadChannelsFunc) {
+	s.reloadChannels = fn
+}
+
+// handleChannelsReload 触发 channel 热加载：重读配置，增量启停 channel
+func (s *Server) handleChannelsReload(c *gin.Context) {
+	if s.reloadChannels == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "channel reload not available"})
+		return
+	}
+
+	result, err := s.reloadChannels(c.Request.Context())
+	if err != nil {
+		s.logger.Error("channel reload failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
 }

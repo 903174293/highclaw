@@ -38,6 +38,8 @@ __pycache__/
 !REGRESSION_TEST_REPORT.md
 !MILESTONE_TEST_REPORT.md
 !CLA-INDIVIDUAL.md
+!CODE_OF_CONDUCT.md
+!DCO
 !.github/pull_request_template.md
 !**/README.md
 ui/src/ui/__screenshots__/
@@ -109,3 +111,7 @@ USER.md
 .agent/*.json
 !.agent/workflows/
 local/
+
+# Private fingerprint files (NEVER COMMIT)
+.fingerprint.private
+.fingerprint-guide.md

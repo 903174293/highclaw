@@ -57,6 +57,7 @@ const (
 	ansiGreen  = "\033[32m"
 	ansiYellow = "\033[33m"
 	ansiGray   = "\033[90m"
+	ansiMagenta = "\033[38;5;99m"
 )
 
 var onboardCmd = &cobra.Command{
@@ -108,20 +109,17 @@ func runWizard(cfg *config.Config) error {
 	printStep(2, 9, "AI Provider & API Key")
 	provider, apiKey, model := setupProvider()
 	cfg.Agent.Model = provider + "/" + model
-	if cfg.Agent.Providers == nil {
-		cfg.Agent.Providers = map[string]config.ProviderConfig{}
-	}
-	p := cfg.Agent.Providers[provider]
+	providerCfg := config.ProviderConfig{}
 	if apiKey != "" {
-		p.APIKey = apiKey
+		providerCfg.APIKey = apiKey
 	}
-	if strings.TrimSpace(p.BaseURL) == "" {
-		p.BaseURL = providerDefaultBaseURL(provider)
+	providerCfg.BaseURL = providerDefaultBaseURL(provider)
+	cfg.Agent.Providers = map[string]config.ProviderConfig{
+		provider: providerCfg,
 	}
-	cfg.Agent.Providers[provider] = p
 
 	printStep(3, 9, "Channels (How You Talk to HighClaw)")
-	cfg.Channels = setupChannels()
+	cfg.Channels = setupChannels(cfg.Channels)
 
 	printStep(4, 9, "Tunnel (Expose to Internet)")
 	cfg.Tunnel = setupTunnel()
@@ -170,7 +168,7 @@ func runChannelsRepairWizard(cfg *config.Config) error {
 	fmt.Println("  Channels Repair — update channel tokens and allowlists only")
 	fmt.Println()
 	printStep(1, 1, "Channels (How You Talk to HighClaw)")
-	cfg.Channels = setupChannels()
+	cfg.Channels = setupChannels(cfg.Channels)
 	if err := config.Save(cfg); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
@@ -198,17 +196,15 @@ func runQuickSetup(cfg *config.Config) error {
 	}
 	cfg.Agent.Workspace = filepath.Join(config.ConfigDir(), "workspace")
 	cfg.Agent.Model = provider + "/" + model
-	if cfg.Agent.Providers == nil {
-		cfg.Agent.Providers = map[string]config.ProviderConfig{}
+	providerCfg := config.ProviderConfig{
+		BaseURL: providerDefaultBaseURL(provider),
 	}
-	p := cfg.Agent.Providers[provider]
 	if strings.TrimSpace(onboardAPIKey) != "" {
-		p.APIKey = strings.TrimSpace(onboardAPIKey)
+		providerCfg.APIKey = strings.TrimSpace(onboardAPIKey)
 	}
-	if strings.TrimSpace(p.BaseURL) == "" {
-		p.BaseURL = providerDefaultBaseURL(provider)
+	cfg.Agent.Providers = map[string]config.ProviderConfig{
+		provider: providerCfg,
 	}
-	cfg.Agent.Providers[provider] = p
 	cfg.Memory = memoryConfigForBackend(mem, mem != "none")
 	if cfg.Gateway.Port == 0 {
 		cfg.Gateway.Port = 8080
@@ -256,10 +252,10 @@ func runQuickSetup(cfg *config.Config) error {
 	fmt.Printf("  %s %s\n", bold("Config saved:"), green(config.ConfigPath()))
 	fmt.Println()
 	fmt.Println("  " + bold("Next steps:"))
-	fmt.Printf("    1. Set your API key:  %s\n", yellow(fmt.Sprintf("export %s=\"sk-...\"", providerEnvVar(provider))))
-	fmt.Printf("    2. Or edit:           %s\n", yellow("~/.highclaw/config.yaml"))
-	fmt.Printf("    3. Chat:              %s\n", yellow("highclaw agent -m \"Hello!\""))
-	fmt.Printf("    4. Gateway:           %s\n", yellow("highclaw gateway"))
+	fmt.Printf("    1. Set your API key:  %s\n", magenta(fmt.Sprintf("export %s=\"sk-...\"", providerEnvVar(provider))))
+	fmt.Printf("    2. Or edit:           %s\n", magenta("~/.highclaw/config.yaml"))
+	fmt.Printf("    3. Chat:              %s\n", magenta("highclaw agent -m \"Hello!\""))
+	fmt.Printf("    4. Gateway:           %s\n", magenta("highclaw gateway"))
 	fmt.Println()
 
 	return nil
@@ -411,12 +407,13 @@ func setupProvider() (string, string, string) {
 	return provider, apiKey, model
 }
 
-func setupChannels() config.ChannelsConfig {
+func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 	printBullet("Channels let you talk to HighClaw from anywhere.")
 	printBullet("CLI is always available. Connect more channels now.")
 	fmt.Println()
 
-	out := config.ChannelsConfig{CLI: true}
+	out := existing
+	out.CLI = true
 	for {
 		options := []string{
 			statusLineWithText("Telegram", channelState(out.Telegram != nil, "✅ connected", "— connect your bot")),
@@ -986,32 +983,67 @@ func printSummary(cfg *config.Config) {
 		fmt.Println("    🔒 Secrets:       plaintext")
 	}
 	fmt.Printf("    🚪 Gateway:       %s\n", green("pairing required (secure)"))
-	fmt.Println()
-	fmt.Println("  Next steps:")
-	fmt.Println()
-	step := 1
-	if !hasAPIKey(cfg, modelProvider(cfg.Agent.Model)) {
-		fmt.Printf("    %s Set your API key:\n", cyan(fmt.Sprintf("%d.", step)))
-		fmt.Printf("       %s\n\n", yellow(fmt.Sprintf("export %s=\"sk-...\"", providerEnvVar(modelProvider(cfg.Agent.Model)))))
-		step++
+	if isGatewayRunning(cfg) {
+		fmt.Printf("    🟢 Process:       %s\n", green(fmt.Sprintf("running (port %d)", cfg.Gateway.Port)))
+	} else {
+		fmt.Printf("    ⚪ Process:       %s\n", gray("not running"))
 	}
-	if hasConfiguredChannels(cfg.Channels) {
-		fmt.Printf("    %s Launch your channels (connected channels → AI → reply):\n", cyan(fmt.Sprintf("%d.", step)))
-		fmt.Printf("       %s\n", yellow("highclaw channel start"))
+	gatewayRunning := isGatewayRunning(cfg)
+	hasChannels := hasConfiguredChannels(cfg.Channels)
+
+	fmt.Println()
+
+	if gatewayRunning {
+		fmt.Printf("  ⚠️  %s\n", bold("Gateway is running — new config will reload automatically"))
+		fmt.Println()
+		fmt.Println("  " + bold("Next steps:"))
+		fmt.Println()
+		if hasChannels {
+			fmt.Printf("    %s Send a message to chat\n", cyan("1."))
+		} else {
+			fmt.Printf("    %s Send a bind verification code message to chat\n", cyan("1."))
+		}
+		fmt.Println("       📱 Telegram   💬 Discord    🔔 Slack")
+		fmt.Println("       💻 iMessage   🔗 Matrix     📞 WhatsApp")
+		fmt.Println("       📧 IRC        🌐 Webhook    🐦 Feishu")
+		fmt.Println("       🏢 WeCom     💚 WeChat")
+		fmt.Println()
+		fmt.Printf("    %s Start interactive TUI mode:\n", cyan("2."))
+		fmt.Printf("       %s\n", magenta("highclaw tui"))
+		fmt.Println()
+		fmt.Printf("    %s Check full status:\n", cyan("3."))
+		fmt.Printf("       %s\n", magenta("highclaw status"))
+		fmt.Println()
+		fmt.Printf("    %s Key APIs %s:\n", cyan("4."), gray(fmt.Sprintf("(localhost:%d)", cfg.Gateway.Port)))
+		fmt.Printf("       🔌 %s  — AI conversation\n", magenta("POST /api/chat"))
+		fmt.Printf("       📊 %s — system status\n", magenta("GET  /api/status"))
+		fmt.Printf("       🔄 %s — channel health\n", magenta("GET  /api/channels/status"))
+		fmt.Println()
+	} else {
+		fmt.Println("  " + bold("Next steps:"))
+		fmt.Println()
+		step := 1
+		if !hasAPIKey(cfg, modelProvider(cfg.Agent.Model)) {
+			fmt.Printf("    %s Set your API key:\n", cyan(fmt.Sprintf("%d.", step)))
+			fmt.Printf("       %s\n\n", magenta(fmt.Sprintf("export %s=\"sk-...\"", providerEnvVar(modelProvider(cfg.Agent.Model)))))
+			step++
+		}
+		fmt.Printf("    %s Send a quick message:\n", cyan(fmt.Sprintf("%d.", step)))
+		fmt.Printf("       %s\n", magenta("highclaw agent -m \"Hello, HighClaw!\""))
 		fmt.Println()
 		step++
+		fmt.Printf("    %s Start interactive CLI mode:\n", cyan(fmt.Sprintf("%d.", step)))
+		fmt.Printf("       %s\n", magenta("highclaw agent"))
+		fmt.Println()
+		step++
+		fmt.Printf("    %s Check full status:\n", cyan(fmt.Sprintf("%d.", step)))
+		fmt.Printf("       %s\n", magenta("highclaw status"))
+		fmt.Println()
+		step++
+		fmt.Printf("    %s Start the gateway (channels + AI + API):\n", cyan(fmt.Sprintf("%d.", step)))
+		fmt.Printf("       %s\n", magenta("highclaw gateway"))
+		fmt.Println()
 	}
-	fmt.Printf("    %s Send a quick message:\n", cyan(fmt.Sprintf("%d.", step)))
-	fmt.Printf("       %s\n", yellow("highclaw agent -m \"Hello, HighClaw!\""))
-	fmt.Println()
-	step++
-	fmt.Printf("    %s Start interactive CLI mode:\n", cyan(fmt.Sprintf("%d.", step)))
-	fmt.Printf("       %s\n", yellow("highclaw agent"))
-	fmt.Println()
-	step++
-	fmt.Printf("    %s Check full status:\n", cyan(fmt.Sprintf("%d.", step)))
-	fmt.Printf("       %s\n", yellow("highclaw status"))
-	fmt.Println()
 	fmt.Println("  ⚡ Happy hacking! 🦀")
 	fmt.Println()
 }
@@ -1553,9 +1585,14 @@ func channelsSummary(c config.ChannelsConfig) string {
 }
 
 func hasConfiguredChannels(c config.ChannelsConfig) bool {
-	return c.Telegram != nil || c.Discord != nil || c.Slack != nil || c.IMessage != nil || c.Matrix != nil || c.Email != nil
+	return c.Telegram != nil || c.Discord != nil || c.Slack != nil ||
+		c.IMessage != nil || c.Matrix != nil || c.Email != nil ||
+		c.Feishu != nil || c.WeCom != nil || c.WeChat != nil ||
+		c.WhatsApp != nil || c.Signal != nil || c.BlueBubbles != nil ||
+		c.Webhook != nil || c.IRC != nil || c.Lark != nil
 }
 
+// promptLaunchChannels 在 gateway 运行时自动触发 channel 重载并通知用户
 func promptLaunchChannels(cfg *config.Config) {
 	if !hasConfiguredChannels(cfg.Channels) {
 		return
@@ -1563,12 +1600,23 @@ func promptLaunchChannels(cfg *config.Config) {
 	if !hasAPIKey(cfg, modelProvider(cfg.Agent.Model)) {
 		return
 	}
-	launch := promptYesNo("🚀 Launch channels now? (connected channels → AI → reply)", true)
-	if launch {
-		fmt.Println()
-		fmt.Println("  ⚡ Starting channel server...")
-		fmt.Println()
-		_ = os.Setenv("HIGHCLAW_AUTOSTART_CHANNELS", "1")
+	if !isGatewayRunning(cfg) {
+		return
+	}
+
+	// gateway 运行中：尝试通知重载 channel 配置
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/internal/reload", cfg.Gateway.Port)
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Post(url, "application/json", nil)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		fmt.Printf("  %s Gateway detected — channels reloaded automatically\n", green("✓"))
+	} else {
+		fmt.Printf("  %s Gateway reload returned %d (restart gateway to apply)\n", yellow("!"), resp.StatusCode)
 	}
 }
 
@@ -1666,7 +1714,8 @@ func cyanUnder(s string) string {
 }
 func green(s string) string  { return color(ansiGreen, s) }
 func yellow(s string) string { return color(ansiYellow, s) }
-func gray(s string) string   { return color(ansiGray, s) }
+func gray(s string) string    { return color(ansiGray, s) }
+func magenta(s string) string { return color(ansiMagenta, s) }
 
 func expandPath(in string) string {
 	v := strings.TrimSpace(in)
@@ -1734,3 +1783,20 @@ func setupSkills(workspace string) {
 	fmt.Printf("  %s Total skills: %d\n", green("✓"), len(allSkills))
 	fmt.Println()
 }
+
+
+// isGatewayRunning 检测 gateway 进程是否正在运行（尝试访问 /health）
+func isGatewayRunning(cfg *config.Config) bool {
+	if cfg.Gateway.Port == 0 {
+		return false
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d/health", cfg.Gateway.Port)
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+

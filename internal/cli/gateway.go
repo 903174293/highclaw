@@ -9,11 +9,14 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/highclaw/highclaw/internal/agent"
 	"github.com/highclaw/highclaw/internal/config"
+	"github.com/highclaw/highclaw/internal/gateway/protocol"
 	"github.com/highclaw/highclaw/internal/gateway/session"
 	"github.com/highclaw/highclaw/internal/infra"
+	"github.com/highclaw/highclaw/internal/infrastructure/channels/feishu"
 	"github.com/highclaw/highclaw/internal/interfaces/http"
 	syslogger "github.com/highclaw/highclaw/internal/system/logger"
 	"github.com/highclaw/highclaw/internal/system/tasklog"
@@ -187,37 +190,267 @@ func runGateway(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start HTTP server in background
+	// 飞书 channel 实例（gateway 级别，供 reload 引用）
+	var feishuCh *feishu.FeishuChannel
+
+	// 启动飞书 channel（长连接模式 + bind 验证码）
+	if cfg.Channels.Feishu != nil && cfg.Channels.Feishu.AppID != "" {
+		feishuCh = startFeishuChannel(ctx, cfg, runner, sessions, logger)
+	}
+
+	// 注入 channel reload 回调
+	httpServer.SetReloadChannels(func(reloadCtx context.Context) (*http.ChannelReloadResult, error) {
+		return reloadChannels(reloadCtx, ctx, cfg, runner, sessions, logger, &feishuCh)
+	})
+
+	// 启动 HTTP server，检测端口绑定是否成功
+	serverErr := make(chan error, 1)
 	go func() {
 		if err := httpServer.Start(ctx); err != nil {
-			slog.Error("HTTP server error", "error", err)
+			serverErr <- err
 		}
 	}()
+
+	// 等待端口绑定结果（200ms 足够检测 address already in use）
+	select {
+	case err := <-serverErr:
+		fmt.Fprintf(os.Stderr, "\n  ❌ %s\n\n", err)
+		cancel()
+		return err
+	case <-time.After(300 * time.Millisecond):
+	}
 
 	slog.Info("HighClaw gateway ready", "port", cfg.Gateway.Port)
 	if logMgr != nil {
 		slog.Info("log files", "dir", logMgr.LogDir(), "file", logMgr.CurrentLogFile())
 	}
 
-	// Wait for shutdown signal.
+	// Wait for shutdown or reload signal.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-sigCh
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-	slog.Info("received shutdown signal", "signal", sig)
+	var lastSig os.Signal
+	for {
+		lastSig = <-sigCh
+		if lastSig == syscall.SIGHUP {
+			slog.Info("received SIGHUP, reloading channels")
+			if result, err := reloadChannels(ctx, ctx, cfg, runner, sessions, logger, &feishuCh); err != nil {
+				slog.Error("SIGHUP reload failed", "error", err)
+			} else {
+				slog.Info("SIGHUP reload complete", "reloaded", result.Reloaded)
+			}
+			continue
+		}
+		slog.Info("received shutdown signal", "signal", lastSig)
+		break
+	}
 
 	// 记录系统停止事件
 	if taskStore != nil {
 		_ = taskStore.Log(&tasklog.TaskRecord{
 			Action: tasklog.ActionSystem,
 			Module: "gateway",
-			RequestBody: fmt.Sprintf("gateway shutdown by signal %v", sig),
+			RequestBody: fmt.Sprintf("gateway shutdown by signal %v", lastSig),
 			Status: "success",
 		})
 	}
 
 	cancel()
 	return nil
+}
+
+
+// startFeishuChannel 创建并启动飞书 channel
+func startFeishuChannel(
+	ctx context.Context,
+	cfg *config.Config,
+	runner *agent.Runner,
+	sessions *session.Manager,
+	logger *slog.Logger,
+) *feishu.FeishuChannel {
+	ch := feishu.NewFeishuChannel(feishu.Config{
+		AppID:        cfg.Channels.Feishu.AppID,
+		AppSecret:    cfg.Channels.Feishu.AppSecret,
+		VerifyToken:  cfg.Channels.Feishu.VerifyToken,
+		EncryptKey:   cfg.Channels.Feishu.EncryptKey,
+		AllowedUsers: cfg.Channels.Feishu.AllowedUsers,
+		AllowedChats: cfg.Channels.Feishu.AllowedChats,
+	}, logger)
+
+	ch.SetMessageHandler(func(msgCtx context.Context, msg *feishu.ParsedMessage) (string, error) {
+		return processFeishuMsg(msgCtx, cfg, runner, sessions, logger, msg)
+	})
+
+	if err := ch.Start(ctx); err != nil {
+		slog.Error("feishu channel start failed", "error", err)
+		return nil
+	}
+	slog.Info("feishu channel active (long connection mode)")
+	return ch
+}
+
+// reloadChannels 重读配置，增量启停 channel（当前仅支持 Feishu）
+func reloadChannels(
+	reloadCtx context.Context,
+	runCtx context.Context,
+	cfg *config.Config,
+	runner *agent.Runner,
+	sessions *session.Manager,
+	logger *slog.Logger,
+	feishuChPtr **feishu.FeishuChannel,
+) (*http.ChannelReloadResult, error) {
+	newCfg, err := config.Load()
+	if err != nil {
+		return nil, fmt.Errorf("reload config: %w", err)
+	}
+	// 更新内存中的配置
+	*cfg = *newCfg
+
+	result := &http.ChannelReloadResult{
+		Channels: make(map[string]http.ChannelStatus),
+	}
+
+	feishuCh := *feishuChPtr
+	feishuCfg := newCfg.Channels.Feishu
+
+	switch {
+	case feishuCfg == nil || feishuCfg.AppID == "":
+		// 配置已删除：停止现有 channel
+		if feishuCh != nil {
+			_ = feishuCh.Stop(reloadCtx)
+			*feishuChPtr = nil
+			result.Reloaded = append(result.Reloaded, "feishu:stopped")
+		}
+		result.Channels["feishu"] = http.ChannelStatus{Status: "disabled"}
+
+	case feishuCh == nil:
+		// 新增 channel：首次启动
+		*feishuChPtr = startFeishuChannel(runCtx, cfg, runner, sessions, logger)
+		ch := *feishuChPtr
+		status := http.ChannelStatus{Status: "started"}
+		if ch != nil && !ch.IsBound() {
+			status.BindCode = ch.BindCode()
+		}
+		result.Reloaded = append(result.Reloaded, "feishu:started")
+		result.Channels["feishu"] = status
+
+	default:
+		// 已有 channel：检查是否需要重连或仅更新白名单
+		oldID := feishuCh.ID()
+		needRestart := false
+
+		// 核心连接参数变更 → 需要重启
+		if feishuCfg.AppID != cfg.Channels.Feishu.AppID ||
+			feishuCfg.AppSecret != cfg.Channels.Feishu.AppSecret {
+			needRestart = true
+		}
+
+		if needRestart {
+			_ = feishuCh.Stop(reloadCtx)
+			*feishuChPtr = startFeishuChannel(runCtx, cfg, runner, sessions, logger)
+			ch := *feishuChPtr
+			status := http.ChannelStatus{Status: "restarted"}
+			if ch != nil && !ch.IsBound() {
+				status.BindCode = ch.BindCode()
+			}
+			result.Reloaded = append(result.Reloaded, "feishu:restarted")
+			result.Channels["feishu"] = status
+		} else {
+			// 仅白名单变更 → 原地更新，不断连
+			feishuCh.UpdateAllowlist(feishuCfg.AllowedUsers, feishuCfg.AllowedChats)
+			result.Reloaded = append(result.Reloaded, "feishu:updated")
+			result.Channels["feishu"] = http.ChannelStatus{Status: "running"}
+			_ = oldID // suppress unused
+		}
+	}
+
+	logger.Info("channel reload complete", "reloaded", result.Reloaded)
+	return result, nil
+}
+
+// processFeishuMsg 处理飞书消息：会话路由 → 构建历史 → 调用 Agent → 返回回复
+func processFeishuMsg(
+	ctx context.Context,
+	cfg *config.Config,
+	runner *agent.Runner,
+	sessions *session.Manager,
+	logger *slog.Logger,
+	msg *feishu.ParsedMessage,
+) (string, error) {
+	peerKind := "direct"
+	groupID := ""
+	if msg.ChatType == "group" {
+		peerKind = "group"
+		groupID = msg.ChatID
+	}
+
+	peer := session.PeerContext{
+		Channel:  "feishu",
+		PeerID:   msg.SenderID,
+		PeerKind: peerKind,
+		GroupID:  groupID,
+	}
+	sessionKey := session.ResolveSessionFromConfig(cfg, peer)
+
+	var history []agent.ChatMessage
+	if sessions != nil {
+		sess := sessions.GetOrCreate(sessionKey, "feishu")
+		sess.AddMessage(protocol.ChatMessage{
+			Role:    "user",
+			Content: msg.Text,
+			Channel: "feishu",
+		})
+
+		allMsgs := sess.Messages()
+		limit := 16
+		start := 0
+		if len(allMsgs) > limit {
+			start = len(allMsgs) - limit
+		}
+		for _, m := range allMsgs[start:] {
+			role := strings.ToLower(strings.TrimSpace(m.Role))
+			if role != "user" && role != "assistant" && role != "system" {
+				continue
+			}
+			content := strings.TrimSpace(m.Content)
+			if content == "" {
+				continue
+			}
+			if len([]rune(content)) > 3000 {
+				content = string([]rune(content)[:3000]) + "..."
+			}
+			history = append(history, agent.ChatMessage{Role: role, Content: content})
+		}
+	}
+
+	if runner == nil {
+		return "", fmt.Errorf("agent not available")
+	}
+
+	result, err := runner.Run(ctx, &agent.RunRequest{
+		SessionKey: sessionKey,
+		Channel:    "feishu",
+		Sender:     msg.SenderID,
+		MessageID:  msg.MessageID,
+		Message:    msg.Text,
+		History:    history,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	if sessions != nil {
+		if sess, ok := sessions.Get(sessionKey); ok {
+			sess.AddMessage(protocol.ChatMessage{
+				Role:    "assistant",
+				Content: result.Reply,
+				Channel: "feishu",
+			})
+		}
+	}
+
+	logger.Info("feishu message processed", "session", sessionKey)
+	return result.Reply, nil
 }
 
 func pickRandomPort() (int, error) {

@@ -58,7 +58,7 @@ func (s *Server) webAuthMiddleware() gin.HandlerFunc {
 		path := c.Request.URL.Path
 		// Keep health/static endpoints unauthenticated to avoid repeated browser prompts
 		// and broken icons/assets during initial page load.
-		if path == "/health" || path == "/api/health" || strings.HasPrefix(path, "/static/") {
+		if path == "/health" || path == "/api/health" || strings.HasPrefix(path, "/static/") || strings.HasPrefix(path, "/api/internal/") {
 			c.Next()
 			return
 		}
@@ -132,6 +132,19 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		c.Next()
+	}
+}
+
+// localhostOnlyMiddleware 仅允许 127.0.0.1 / ::1 访问，拒绝外部请求
+func localhostOnlyMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ip := c.ClientIP()
+		if ip != "127.0.0.1" && ip != "::1" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "localhost only"})
+			c.Abort()
+			return
+		}
 		c.Next()
 	}
 }

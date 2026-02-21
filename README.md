@@ -37,9 +37,42 @@ Go binary · modular traits · 22+ providers · pluggable channels/tools/memory 
 ### Why teams pick HighClaw
 
 - **Lean by default:** small Go binary, fast startup, low memory footprint.
+- **Gateway optional:** CLI/TUI works standalone — no server process, no listening port, zero service overhead. Start the gateway only when you need channels or API access.
 - **Secure by design:** pairing, strict sandboxing, explicit allowlists, workspace scoping.
 - **Fully swappable:** core systems are traits (providers, channels, tools, memory, tunnels).
 - **No lock-in:** OpenAI-compatible provider support + pluggable custom endpoints.
+
+### Dual-Mode Architecture — Gateway is Optional
+
+Unlike most agent frameworks that require a running server, HighClaw separates the **agent core** from the **gateway service**. The agent runs fully standalone — no HTTP server, no background process, no port binding.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    HighClaw Dual-Mode                        │
+├──────────────────────────┬──────────────────────────────────┤
+│   CLI / TUI Mode         │   Gateway Mode                   │
+│   (No server needed)     │   (Service process)              │
+├──────────────────────────┼──────────────────────────────────┤
+│ highclaw agent -m "..."  │ highclaw gateway                 │
+│ highclaw agent           │                                  │
+│ highclaw tui             │ Feishu / Telegram / Discord      │
+│ highclaw memory search   │ HTTP API / WebSocket             │
+│ highclaw sessions list   │ Pairing authentication           │
+│ highclaw config set ...  │ Channel hot-reload               │
+│ highclaw tasks list      │ Multi-channel message routing    │
+├──────────────────────────┼──────────────────────────────────┤
+│ ✅ Direct LLM calls      │ ✅ Webhook / long-connection     │
+│ ✅ Local memory & session│ ✅ Bearer token security          │
+│ ✅ Zero network overhead │ ✅ Multi-user channel access      │
+│ ✅ No port, no process   │ ✅ Rate limiting & audit log      │
+└──────────────────────────┴──────────────────────────────────┘
+```
+
+**CLI Mode** — the agent loads config, initializes provider and memory, calls the LLM API directly, and exits. No daemon, no port, no background process. Ideal for terminal-centric workflows: coding assistance, quick Q&A, scripting automation.
+
+**Gateway Mode** — starts an HTTP/WebSocket server for external channel integrations (Feishu, Telegram, Discord, etc.), REST API access, and multi-user routing. Adds pairing authentication, rate limiting, and channel management.
+
+This means: if you only use HighClaw from the terminal, you never need to run `highclaw gateway`. The agent works as a pure CLI tool with the same capabilities — memory, sessions, tools, and multi-turn conversations — all without a server process.
 
 ## HighClaw vs OpenClaw
 

@@ -26,14 +26,15 @@ var staticFiles embed.FS
 
 // Server represents the HTTP/WebSocket server.
 type Server struct {
-	router    *gin.Engine
-	cfg       *config.Config
-	logger    *slog.Logger
-	upgrader  websocket.Upgrader
-	agent     *agent.Runner
-	sessions  *session.Manager
-	logBuffer *LogBuffer
-	startedAt time.Time
+	router      *gin.Engine
+	cfg         *config.Config
+	configCache *config.Cache
+	logger      *slog.Logger
+	upgrader    websocket.Upgrader
+	agent       *agent.Runner
+	sessions    *session.Manager
+	logBuffer   *LogBuffer
+	startedAt   time.Time
 
 	pairing         *security.PairingGuard
 	pairRateLimiter *security.SlidingWindowLimiter
@@ -44,7 +45,25 @@ type Server struct {
 
 	webSessionMu sync.RWMutex
 	webSessions  map[string]webSession
+
+	reloadChannels ReloadChannelsFunc
 }
+
+// ChannelReloadResult 描述 channel reload 的结果
+type ChannelReloadResult struct {
+	Reloaded []string                    `json:"reloaded"`
+	Channels map[string]ChannelStatus    `json:"channels"`
+}
+
+// ChannelStatus 单个 channel 的状态
+type ChannelStatus struct {
+	Status   string `json:"status"`
+	BindCode string `json:"bindCode,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// ReloadChannelsFunc 由 gateway 注入，执行实际的 channel 增量重载
+type ReloadChannelsFunc func(ctx context.Context) (*ChannelReloadResult, error)
 
 type webSession struct {
 	Username  string
@@ -66,9 +85,10 @@ func NewServer(cfg *config.Config, logger *slog.Logger, runner *agent.Runner, se
 	router.Use(corsMiddleware())
 
 	s := &Server{
-		router:    router,
-		cfg:       cfg,
-		logger:    logger,
+		router:      router,
+		cfg:         cfg,
+		configCache: config.NewCache(cfg, 500*time.Millisecond),
+		logger:      logger,
 		agent:     runner,
 		sessions:  sessions,
 		logBuffer: logBuffer,
@@ -127,6 +147,13 @@ func (s *Server) setupRoutes() {
 		api.POST("/auth/logout", s.handleLogout)
 		api.GET("/auth/me", s.handleAuthMe)
 
+		// 仅限 localhost 的内部管理端点（免认证）
+		internal := api.Group("/internal")
+		internal.Use(localhostOnlyMiddleware())
+		{
+			internal.POST("/reload", s.handleChannelsReload)
+		}
+
 		protected := api.Group("/")
 		protected.Use(s.authMiddleware())
 		{
@@ -147,6 +174,7 @@ func (s *Server) setupRoutes() {
 			// Channels
 			protected.GET("/channels", s.handleListChannels)
 			protected.GET("/channels/status", s.handleChannelsStatus)
+			protected.POST("/channels/reload", s.handleChannelsReload)
 
 			// Models
 			protected.GET("/models", s.handleListModels)
@@ -222,17 +250,28 @@ func (s *Server) Start(ctx context.Context) error {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	// Start server in goroutine
+	listenErr := make(chan error, 1)
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			s.logger.Error("HTTP server error", "error", err)
+			listenErr <- err
 		}
 	}()
 
-	// Wait for context cancellation
-	<-ctx.Done()
+	// 等待短暂窗口检测端口绑定是否成功（address already in use 等错误会立刻返回）
+	select {
+	case err := <-listenErr:
+		return fmt.Errorf("gateway failed to start: %w\n  → Is another HighClaw instance running on %s?", err, addr)
+	case <-time.After(200 * time.Millisecond):
+		// 端口绑定成功，进入正常运行
+	}
 
-	// Graceful shutdown
+	// 正常运行阶段：等待 context 取消或运行时错误
+	select {
+	case err := <-listenErr:
+		return fmt.Errorf("gateway runtime error: %w", err)
+	case <-ctx.Done():
+	}
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

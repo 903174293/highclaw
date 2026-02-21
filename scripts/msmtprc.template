@@ -1,0 +1,70 @@
+# msmtp 配置模板 - QQ 邮箱
+# 
+# 使用方法:
+# 1. 复制此文件到 ~/.msmtprc
+#    cp ~/.highclaw/scripts/msmtprc.template ~/.msmtprc
+#
+# 2. 获取 QQ 邮箱授权码:
+#    - 登录 QQ 邮箱网页版
+#    - 设置 → 账户 → POP3/IMAP/SMTP/Exchange/CardDAV/CalDAV服务
+#    - 开启 SMTP 服务
+#    - 生成授权码（不是 QQ 密码！）
+#
+# 3. 替换下面的 YOUR_QQ_SMTP_PASSWORD 为授权码
+#
+# 4. 设置权限:
+#    chmod 600 ~/.msmtprc
+#
+# 5. 测试:
+#    echo "测试邮件" | msmtp 903174293@qq.com
+
+# 默认配置
+defaults
+auth           on
+tls            on
+tls_trust_file /etc/ssl/certs/ca-certificates.crt
+# macOS 使用这个路径:
+# tls_trust_file /usr/local/etc/openssl/cert.pem
+
+# QQ 邮箱账户
+account        qq
+host           smtp.qq.com
+port           465
+tls_starttls   off
+from           903174293@qq.com
+user           903174293@qq.com
+password       YOUR_QQ_SMTP_PASSWORD
+
+# 设置默认账户
+account default : qq
+
+# ================================
+# 其他邮箱配置参考
+# ================================
+
+# # 163 邮箱
+# account        163
+# host           smtp.163.com
+# port           465
+# tls_starttls   off
+# from           your_email@163.com
+# user           your_email@163.com
+# password       YOUR_163_SMTP_PASSWORD
+
+# # Gmail
+# account        gmail
+# host           smtp.gmail.com
+# port           587
+# tls_starttls   on
+# from           your_email@gmail.com
+# user           your_email@gmail.com
+# password       YOUR_APP_PASSWORD
+
+# # Outlook
+# account        outlook
+# host           smtp-mail.outlook.com
+# port           587
+# tls_starttls   on
+# from           your_email@outlook.com
+# user           your_email@outlook.com
+# password       YOUR_PASSWORD

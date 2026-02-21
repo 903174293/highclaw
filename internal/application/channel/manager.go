@@ -85,16 +85,16 @@ func (m *Manager) Initialize(ctx context.Context) error {
 	// 初始化飞书 channel
 	if m.config.Channels.Feishu != nil && m.config.Channels.Feishu.AppID != "" {
 		m.logger.Info("initializing feishu channel")
-		fs := feishu.NewFeishuChannel(feishu.Config{
+		_ = feishu.NewFeishuChannel(feishu.Config{
 			AppID:        m.config.Channels.Feishu.AppID,
 			AppSecret:    m.config.Channels.Feishu.AppSecret,
 			VerifyToken:  m.config.Channels.Feishu.VerifyToken,
 			EncryptKey:   m.config.Channels.Feishu.EncryptKey,
 			AllowedUsers: m.config.Channels.Feishu.AllowedUsers,
 			AllowedChats: m.config.Channels.Feishu.AllowedChats,
-			WebhookURL:   m.config.Channels.Feishu.WebhookURL,
 		}, m.logger)
-		m.registry.Register(fs)
+		// 飞书 channel 使用长连接模式，在 gateway 启动时独立管理，不注册到 registry
+		m.logger.Info("feishu channel configured (managed by gateway)")
 	}
 
 	// 初始化企业微信 channel
