@@ -313,11 +313,11 @@ func runQuickSetup(cmd *cobra.Command, cfg *config.Config, configExists bool) er
 // runtimeStatus 可为 nil（gateway 未运行时传 nil）
 func channelRuntimeTag(name string, runtimeStatus map[string]channelRuntimeInfo) string {
 	if runtimeStatus == nil {
-		return gray("  \u2714 configured")
+		return gray("  \u26AA configured")
 	}
 	info, ok := runtimeStatus[name]
 	if !ok {
-		return gray("  \u2714 configured")
+		return gray("  \u26AA configured")
 	}
 	switch info.Status {
 	case "running":
@@ -325,7 +325,7 @@ func channelRuntimeTag(name string, runtimeStatus map[string]channelRuntimeInfo)
 	case "waiting_bind":
 		tag := yellow("  \U0001f7e1 waiting bind")
 		if info.BindCode != "" {
-			tag += yellow(fmt.Sprintf(" (code: %s)", info.BindCode))
+			tag += yellow(fmt.Sprintf(" (code: %s, send ", info.BindCode)) + green("bind "+info.BindCode) + yellow(" to bot)")
 		}
 		return tag
 	case "error":
@@ -335,7 +335,7 @@ func channelRuntimeTag(name string, runtimeStatus map[string]channelRuntimeInfo)
 		}
 		return red("  \U0001f534 " + msg)
 	default:
-		return gray("  \u2714 " + info.Status)
+		return gray("  \u26AA " + info.Status)
 	}
 }
 
@@ -2060,7 +2060,7 @@ func promptLaunchChannels(cfg *config.Config) {
 	// 显示 bind code（新启动或重启的 channel 可能需要 bind）
 	for chName, chStatus := range reloadResult.Channels {
 		if chStatus.BindCode != "" {
-			fmt.Printf("  🔑 %s bind code: %s\n", chName, chStatus.BindCode)
+			fmt.Printf("  🔑 %s bind code: %s  (send %s to bot)\n", chName, yellow(chStatus.BindCode), green("bind "+chStatus.BindCode))
 		}
 	}
 }

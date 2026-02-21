@@ -50,6 +50,12 @@ type bindState struct {
 	BoundAt     string `json:"boundAt"`
 }
 
+// bindReplyReq bind 流程中的回复请求（投递到串行队列）
+type bindReplyReq struct {
+	messageID string
+	text      string
+}
+
 // FeishuChannel 飞书消息 channel，SDK 长连接 + bind 验证码模式
 type FeishuChannel struct {
 	config    Config
@@ -68,6 +74,9 @@ type FeishuChannel struct {
 	seenMsgMu      sync.Mutex
 	seenMsgs       map[string]time.Time
 	seenLastCleanup time.Time
+
+	// bind 回复串行队列（避免并发 reply 触发飞书 API 限流）
+	bindReplyCh chan bindReplyReq
 
 	onMessage MessageHandler
 }
@@ -152,6 +161,10 @@ func (f *FeishuChannel) Start(ctx context.Context) error {
 		larkws.WithLogLevel(larkcore.LogLevelInfo),
 	)
 
+	// 初始化 bind 回复队列并启动串行消费 worker
+	f.bindReplyCh = make(chan bindReplyReq, 50)
+	go f.bindReplyWorker()
+
 	// 先标记已连接，确保 SDK 回调触发时消息不被丢弃
 	f.connected = true
 
@@ -173,8 +186,22 @@ func (f *FeishuChannel) Start(ctx context.Context) error {
 	// 输出连接状态 banner（含配置详情）
 	if f.bound {
 		printFeishuBanner("reconnected", f.config, "", f.boundUserID)
+		f.logger.Info("feishu connection status",
+			"status", "reconnected",
+			"appId", maskID(f.config.AppID),
+			"botName", f.config.BotName,
+			"users", usersInfo(f.config.AllowedUsers),
+			"boundUser", maskID(f.boundUserID),
+		)
 	} else {
 		printFeishuBanner("waiting_bind", f.config, f.bindCode, "")
+		f.logger.Info("feishu connection status",
+			"status", "waiting_bind",
+			"appId", maskID(f.config.AppID),
+			"botName", f.config.BotName,
+			"users", usersInfo(f.config.AllowedUsers),
+			"bindCode", f.bindCode,
+		)
 	}
 
 	return nil
@@ -189,6 +216,12 @@ func (f *FeishuChannel) Stop(_ context.Context) error {
 	}
 	f.connected = false
 
+	// 关闭 bind 回复队列（worker goroutine 自然退出）
+	if f.bindReplyCh != nil {
+		close(f.bindReplyCh)
+		f.bindReplyCh = nil
+	}
+
 	// 取消 WebSocket context，阻止 SDK 重连
 	if f.cancelWs != nil {
 		f.cancelWs()
@@ -197,6 +230,10 @@ func (f *FeishuChannel) Stop(_ context.Context) error {
 
 	// 输出断开 banner
 	printFeishuBanner("stopped", f.config, "", "")
+	f.logger.Info("feishu connection status",
+		"status", "stopped",
+		"appId", maskID(f.config.AppID),
+	)
 
 	return nil
 }
@@ -218,6 +255,7 @@ func (f *FeishuChannel) IsBound() bool {
 // handleMessageEvent SDK 事件回调入口：解析消息 -> 去重 -> 连接检查 -> bind 流程 -> 业务处理
 func (f *FeishuChannel) handleMessageEvent(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
 	if event == nil || event.Event == nil || event.Event.Message == nil {
+		f.logger.Warn("feishu: SDK callback with nil event/message")
 		return nil
 	}
 
@@ -226,6 +264,11 @@ func (f *FeishuChannel) handleMessageEvent(ctx context.Context, event *larkim.P2
 
 	// 只处理文本消息
 	if msg.MessageType == nil || *msg.MessageType != "text" {
+		msgType := "nil"
+		if msg.MessageType != nil {
+			msgType = *msg.MessageType
+		}
+		f.logger.Debug("feishu: non-text message ignored", "type", msgType)
 		return nil
 	}
 
@@ -245,6 +288,12 @@ func (f *FeishuChannel) handleMessageEvent(ctx context.Context, event *larkim.P2
 	chatID := ptrStr(msg.ChatId)
 	chatType := ptrStr(msg.ChatType)
 	messageID := ptrStr(msg.MessageId)
+
+	f.logger.Info("feishu: event received",
+		"messageId", messageID,
+		"sender", maskID(senderID),
+		"chatType", chatType,
+		"textPreview", truncateText(text, 20))
 
 	// 连接状态检查：channel 已停止时丢弃消息
 	f.mu.RLock()
@@ -304,7 +353,9 @@ func (f *FeishuChannel) handleMessageEvent(ctx context.Context, event *larkim.P2
 		f.logger.Info("feishu: unbound, entering bind flow",
 			"messageId", messageID,
 			"sender", maskID(senderID))
-		return f.handleBind(ctx, messageID, senderID, text)
+		// 异步处理 bind，避免同步 HTTP 调用阻塞 SDK 事件循环导致后续消息丢失
+		go f.handleBind(context.Background(), messageID, senderID, text)
+		return nil
 	}
 
 	// 白名单检查
@@ -416,7 +467,8 @@ func (f *FeishuChannel) handleBind(ctx context.Context, messageID, senderID, tex
 			BoundAt:     time.Now().UTC().Format(time.RFC3339),
 		})
 
-		// 使用独立 context 回复，避免 SDK 回调 context 超时导致回复丢失
+		// bind 成功：先清空队列中残留的 mismatch 回复，再直接发送 success
+		f.drainBindReplyQueue()
 		if err := f.replyText(context.Background(), messageID, "Bind successful! HighClaw connected. You can start chatting now."); err != nil {
 			f.logger.Error("feishu bind success reply failed", "error", err)
 		}
@@ -424,8 +476,14 @@ func (f *FeishuChannel) handleBind(ctx context.Context, messageID, senderID, tex
 	}
 
 	f.logger.Warn("feishu bind code mismatch", "got", code)
-	if err := f.replyText(context.Background(), messageID, "Bind code mismatch. Please check the bind code in your terminal and send: bind <code>"); err != nil {
-		f.logger.Error("feishu bind mismatch reply failed", "error", err)
+	// 投递到串行回复队列，避免并发 API 调用触发飞书限流
+	select {
+	case f.bindReplyCh <- bindReplyReq{
+		messageID: messageID,
+		text:      "Bind code mismatch. Please check the bind code in your terminal and send: bind <code>",
+	}:
+	default:
+		f.logger.Warn("feishu: bind reply queue full, reply dropped", "messageId", messageID)
 	}
 	return nil
 }
@@ -480,6 +538,43 @@ func (f *FeishuChannel) patchMessage(ctx context.Context, messageID, text string
 	}
 	return nil
 }
+
+// ============ bind 回复队列 ============
+
+// bindReplyWorker 串行消费 bind 回复队列，逐条发送，失败重试（最多 3 次，退避递增）
+func (f *FeishuChannel) bindReplyWorker() {
+	for req := range f.bindReplyCh {
+		var lastErr error
+		for attempt := 1; attempt <= 3; attempt++ {
+			lastErr = f.replyText(context.Background(), req.messageID, req.text)
+			if lastErr == nil {
+				break
+			}
+			f.logger.Warn("feishu bind reply failed, retrying",
+				"messageId", req.messageID,
+				"attempt", attempt,
+				"error", lastErr)
+			time.Sleep(time.Duration(attempt) * 300 * time.Millisecond)
+		}
+		if lastErr != nil {
+			f.logger.Error("feishu bind reply exhausted retries",
+				"messageId", req.messageID,
+				"error", lastErr)
+		}
+	}
+}
+
+// drainBindReplyQueue 清空队列中残留的 mismatch 回复（bind 成功后调用）
+func (f *FeishuChannel) drainBindReplyQueue() {
+	for {
+		select {
+		case <-f.bindReplyCh:
+		default:
+			return
+		}
+	}
+}
+
 
 // ============ bind 状态持久化 ============
 
@@ -616,6 +711,17 @@ func printFeishuBanner(status string, cfg Config, bindCode, boundUser string) {
 }
 
 // ============ 工具函数 ============
+
+// usersInfo 格式化 AllowedUsers 信息，用于结构化日志
+func usersInfo(allowedUsers []string) string {
+	if len(allowedUsers) == 0 {
+		return "bind-only"
+	}
+	if len(allowedUsers) == 1 && allowedUsers[0] == "*" {
+		return "* (all)"
+	}
+	return fmt.Sprintf("%d user(s)", len(allowedUsers))
+}
 
 func ptrStr(p *string) string {
 	if p == nil {
