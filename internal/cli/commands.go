@@ -266,10 +266,9 @@ var channelsStatusCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Printf("telegram: %v\n", cfg.Channels.Telegram != nil && cfg.Channels.Telegram.BotToken != "")
-		fmt.Printf("discord : %v\n", cfg.Channels.Discord != nil && cfg.Channels.Discord.Token != "")
-		fmt.Printf("slack   : %v\n", cfg.Channels.Slack != nil && cfg.Channels.Slack.BotToken != "")
-		fmt.Printf("signal  : %v\n", cfg.Channels.Signal != nil && cfg.Channels.Signal.Enabled)
+		fmt.Println("  Channels:")
+		fmt.Printf("    📡 Configured: %s\n", channelsSummary(cfg.Channels))
+		printChannelDetails(cfg, cfg.Gateway.Port)
 		return nil
 	},
 }
@@ -444,40 +443,37 @@ var statusCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {
-			fmt.Printf("⚠️  Config: %v\n", err)
+			fmt.Printf("  %s Config: %v\n", yellow("!"), err)
 			cfg = config.Default()
 		} else {
-			fmt.Printf("✅ Config loaded from: %s\n", config.ConfigPath())
+			fmt.Printf("  %s Config:     %s\n", green("\u2713"), config.ConfigPath())
 		}
 
-		fmt.Printf("\n📊 Gateway:\n")
-		fmt.Printf("   Port: %d\n", cfg.Gateway.Port)
-		fmt.Printf("   Bind: %s\n", cfg.Gateway.Bind)
+		fmt.Println()
+		fmt.Printf("  %s Model:      %s\n", green("\u2713"), green(cfg.Agent.Model))
+		fmt.Printf("              %s config.yaml \u2192 agent.model\n", gray("\u6765\u6e90:"))
+		fmt.Printf("  %s Workspace:  %s\n", green("\u2713"), cfg.Agent.Workspace)
 
-		fmt.Printf("\n🤖 Agent:\n")
-		fmt.Printf("   Model: %s\n", cfg.Agent.Model)
-		fmt.Printf("   Workspace: %s\n", cfg.Agent.Workspace)
+		fmt.Println()
+		printProviderKeys(cfg, "  ", "\U0001f916")
 
-		fmt.Printf("\n📡 Channels:\n")
-		if cfg.Channels.Telegram != nil && cfg.Channels.Telegram.BotToken != "" {
-			fmt.Printf("   Telegram: configured\n")
-		}
-		if cfg.Channels.Discord != nil && cfg.Channels.Discord.Token != "" {
-			fmt.Printf("   Discord: configured\n")
-		}
-		if cfg.Channels.Slack != nil && cfg.Channels.Slack.BotToken != "" {
-			fmt.Printf("   Slack: configured\n")
-		}
+		fmt.Println()
+		fmt.Printf("  %s Channels:   %s\n", green("\u2713"), channelsSummary(cfg.Channels))
+		printChannelDetails(cfg, cfg.Gateway.Port)
 
-		url := fmt.Sprintf("http://127.0.0.1:%d/api/status", cfg.Gateway.Port)
-		resp, err := http.Get(url)
+		fmt.Println()
+		healthURL := fmt.Sprintf("http://127.0.0.1:%d/health", cfg.Gateway.Port)
+		resp, err := http.Get(healthURL)
 		if err != nil {
-			fmt.Printf("\n🌐 Live Gateway: unreachable (%v)\n", err)
+			fmt.Printf("  %s Gateway:    %s (port %d)\n", gray("\u26aa"), gray("not running"), cfg.Gateway.Port)
 		} else {
-			defer resp.Body.Close()
-			fmt.Printf("\n🌐 Live Gateway: %s\n", resp.Status)
+			resp.Body.Close()
+			fmt.Printf("  %s Gateway:    %s (port %d)\n", green("\U0001f7e2"), green("running"), cfg.Gateway.Port)
 		}
-		fmt.Printf("\n💡 Tip: Run 'highclaw gateway' to start the server\n")
+
+		fmt.Println()
+		fmt.Printf("  %s \u5207\u6362\u6a21\u578b:  %s\n", gray("\u2192"), magenta("highclaw models set <provider/model>"))
+		fmt.Printf("  %s \u542f\u52a8\u670d\u52a1:  %s\n", gray("\u2192"), magenta("highclaw gateway"))
 		return nil
 	},
 }

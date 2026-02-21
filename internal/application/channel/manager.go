@@ -92,6 +92,7 @@ func (m *Manager) Initialize(ctx context.Context) error {
 			EncryptKey:   m.config.Channels.Feishu.EncryptKey,
 			AllowedUsers: m.config.Channels.Feishu.AllowedUsers,
 			AllowedChats: m.config.Channels.Feishu.AllowedChats,
+			BotName:      m.config.Channels.Feishu.BotName,
 		}, m.logger)
 		// 飞书 channel 使用长连接模式，在 gateway 启动时独立管理，不注册到 registry
 		m.logger.Info("feishu channel configured (managed by gateway)")

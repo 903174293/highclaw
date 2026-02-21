@@ -7,12 +7,17 @@ import (
 	"testing"
 )
 
-func TestIsAnthropicSetupToken(t *testing.T) {
-	if !isAnthropicSetupToken("sk-ant-oat01-abc") {
-		t.Fatal("expected setup token to be detected")
+func TestIsAnthropicNativeKey(t *testing.T) {
+	// sk-ant- 前缀 = Anthropic 原生 key，使用 x-api-key header
+	if !isAnthropicNativeKey("sk-ant-api03-abc") {
+		t.Fatal("expected sk-ant- prefix to be native key")
 	}
-	if isAnthropicSetupToken("sk-ant-api-key") {
-		t.Fatal("did not expect standard api key to be detected as setup token")
+	// 非 sk-ant- 前缀 = 第三方兼容 provider，使用 Bearer
+	if isAnthropicNativeKey("sk-cp-minimax-key") {
+		t.Fatal("did not expect non-anthropic key to be detected as native")
+	}
+	if isAnthropicNativeKey("eyJhbGciOi...") {
+		t.Fatal("did not expect JWT-like token to be native key")
 	}
 }
 
@@ -55,6 +60,8 @@ func TestAnthropicClientUsesCorrectAuthHeader(t *testing.T) {
 		}
 	}
 
-	run(t, "sk-ant-oat01-setup-token", true)
-	run(t, "sk-ant-normal-api-key", false)
+	// 第三方兼容 provider（MiniMax 等）使用 Bearer
+	run(t, "sk-cp-minimax-key", true)
+	// Anthropic 原生 key 使用 x-api-key
+	run(t, "sk-ant-api03-native-key", false)
 }

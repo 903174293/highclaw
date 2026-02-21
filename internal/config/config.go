@@ -361,6 +361,8 @@ type FeishuConfig struct {
 	AllowedChats []string `json:"allowedChats,omitempty"`
 	// WebhookURL 接收消息的 Webhook 地址 (可选)
 	WebhookURL string `json:"webhookUrl,omitempty"`
+	// BotName 飞书机器人中文名（onboard 验证凭证时自动获取）
+	BotName string `json:"botName,omitempty"`
 }
 
 // WeComConfig 配置企业微信 channel

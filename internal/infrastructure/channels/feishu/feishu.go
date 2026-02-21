@@ -29,6 +29,7 @@ type Config struct {
 	EncryptKey   string
 	AllowedUsers []string
 	AllowedChats []string
+	BotName      string
 }
 
 // ParsedMessage 解析后的消息，供上层路由使用
@@ -151,6 +152,9 @@ func (f *FeishuChannel) Start(ctx context.Context) error {
 		larkws.WithLogLevel(larkcore.LogLevelInfo),
 	)
 
+	// 先标记已连接，确保 SDK 回调触发时消息不被丢弃
+	f.connected = true
+
 	// Start() 是阻塞式的，放后台 goroutine
 	errCh := make(chan error, 1)
 	go func() {
@@ -160,12 +164,11 @@ func (f *FeishuChannel) Start(ctx context.Context) error {
 	// 等 3 秒检测是否立即失败（如凭证错误）
 	select {
 	case err := <-errCh:
+		f.connected = false
 		cancel()
 		return fmt.Errorf("feishu connection failed: %w", err)
 	case <-time.After(3 * time.Second):
 	}
-
-	f.connected = true
 
 	// 输出连接状态 banner（含配置详情）
 	if f.bound {
@@ -343,15 +346,41 @@ func (f *FeishuChannel) handleMessageEvent(ctx context.Context, event *larkim.P2
 
 	// 异步处理，避免阻塞 SDK 事件循环
 	go func() {
-		reply, err := f.onMessage(context.Background(), parsed)
+		bgCtx := context.Background()
+
+		// 先发一条"思考中"占位消息，让用户知道机器人在处理
+		thinkingResp, err := f.apiClient.Im.Message.Reply(bgCtx, larkim.NewReplyMessageReqBuilder().
+			MessageId(messageID).
+			Body(larkim.NewReplyMessageReqBodyBuilder().
+				MsgType("text").
+				Content("{\"text\":\"⏳ 思考中...\"}").
+				Build()).
+			Build())
+		var thinkingMsgID string
+		if err == nil && thinkingResp.Success() && thinkingResp.Data != nil && thinkingResp.Data.MessageId != nil {
+			thinkingMsgID = *thinkingResp.Data.MessageId
+		}
+
+		reply, err := f.onMessage(bgCtx, parsed)
 		if err != nil {
 			f.logger.Error("feishu message handler error", "error", err)
-			_ = f.replyText(context.Background(), messageID, "error: "+err.Error())
+			errText := "\u274c " + err.Error()
+			if thinkingMsgID != "" {
+				_ = f.patchMessage(bgCtx, thinkingMsgID, errText)
+			} else {
+				_ = f.replyText(bgCtx, messageID, errText)
+			}
 			return
 		}
 		if reply != "" {
-			if err := f.replyText(context.Background(), messageID, reply); err != nil {
-				f.logger.Error("feishu reply failed", "error", err)
+			if thinkingMsgID != "" {
+				// 用实际回复替换"思考中"
+				if patchErr := f.patchMessage(bgCtx, thinkingMsgID, reply); patchErr != nil {
+					f.logger.Warn("feishu patch failed, falling back to new reply", "error", patchErr)
+					_ = f.replyText(bgCtx, messageID, reply)
+				}
+			} else {
+				_ = f.replyText(bgCtx, messageID, reply)
 			}
 		}
 	}()
@@ -426,6 +455,28 @@ func (f *FeishuChannel) replyText(ctx context.Context, messageID, text string) e
 // ReplyMessage 公开的回复方法（供外部使用）
 func (f *FeishuChannel) ReplyMessage(ctx context.Context, messageID, text string) error {
 	return f.replyText(ctx, messageID, text)
+}
+
+// patchMessage 更新已发送的消息内容（用于替换"思考中"占位消息）
+func (f *FeishuChannel) patchMessage(ctx context.Context, messageID, text string) error {
+	if f.apiClient == nil {
+		return fmt.Errorf("api client not initialized")
+	}
+	contentJSON, _ := json.Marshal(map[string]string{"text": text})
+	resp, err := f.apiClient.Im.Message.Update(ctx, larkim.NewUpdateMessageReqBuilder().
+		MessageId(messageID).
+		Body(larkim.NewUpdateMessageReqBodyBuilder().
+			MsgType("text").
+			Content(string(contentJSON)).
+			Build()).
+		Build())
+	if err != nil {
+		return fmt.Errorf("feishu patch API call: %w", err)
+	}
+	if !resp.Success() {
+		return fmt.Errorf("feishu patch error: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	return nil
 }
 
 // ============ bind 状态持久化 ============
@@ -509,6 +560,11 @@ func printFeishuBanner(status string, cfg Config, bindCode, boundUser string) {
 
 	// 格式化 appId（脱敏）
 	maskedAppID := maskID(cfg.AppID)
+	// 显示机器人中文名
+	botNameStr := ""
+	if cfg.BotName != "" {
+		botNameStr = cfg.BotName
+	}
 	// 格式化 users 信息
 	usersStr := "bind-only"
 	if len(cfg.AllowedUsers) > 0 {
@@ -528,6 +584,9 @@ func printFeishuBanner(status string, cfg Config, bindCode, boundUser string) {
 		fmt.Println(cyan + "  ║" + reset + gray + "  type:  feishu-ws                            " + reset + cyan + "║" + reset)
 		fmt.Println(cyan + "  ║" + reset + gray + "  appId: " + maskedAppID + strings.Repeat(" ", 37-len(maskedAppID)) + reset + cyan + "║" + reset)
 		fmt.Println(cyan + "  ║" + reset + gray + "  users: " + usersStr + strings.Repeat(" ", 37-len(usersStr)) + reset + cyan + "║" + reset)
+		if botNameStr != "" {
+			fmt.Println(cyan + "  ║" + reset + gray + "  bot:   " + botNameStr + strings.Repeat(" ", max(0, 37-len(botNameStr))) + reset + cyan + "║" + reset)
+		}
 		fmt.Println(cyan + "  ║" + reset + "                                              " + cyan + "║" + reset)
 		fmt.Println(cyan + "  ║" + reset + "  Bind code: " + yellow + bold + bindCode + reset + strings.Repeat(" ", 33-len(bindCode)) + cyan + "║" + reset)
 		fmt.Println(cyan + "  ║" + reset + "  Send to bot: " + green + "bind " + bindCode + reset + strings.Repeat(" ", 26-len(bindCode)) + cyan + "║" + reset)
@@ -537,6 +596,9 @@ func printFeishuBanner(status string, cfg Config, bindCode, boundUser string) {
 		fmt.Println(cyan + "  ║" + reset + gray + "  type:  feishu-ws                            " + reset + cyan + "║" + reset)
 		fmt.Println(cyan + "  ║" + reset + gray + "  appId: " + maskedAppID + strings.Repeat(" ", 37-len(maskedAppID)) + reset + cyan + "║" + reset)
 		fmt.Println(cyan + "  ║" + reset + gray + "  users: " + usersStr + strings.Repeat(" ", 37-len(usersStr)) + reset + cyan + "║" + reset)
+		if botNameStr != "" {
+			fmt.Println(cyan + "  ║" + reset + gray + "  bot:   " + botNameStr + strings.Repeat(" ", max(0, 37-len(botNameStr))) + reset + cyan + "║" + reset)
+		}
 		if boundUser != "" {
 			bu := maskID(boundUser)
 			fmt.Println(cyan + "  ║" + reset + gray + "  bound: " + bu + strings.Repeat(" ", 37-len(bu)) + reset + cyan + "║" + reset)

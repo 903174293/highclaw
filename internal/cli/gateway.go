@@ -185,8 +185,8 @@ func runGateway(cmd *cobra.Command, args []string) error {
 	logger = slog.New(bufHandler)
 	slog.SetDefault(logger)
 
-	// Create HTTP/Web server (which includes WebSocket gateway)
-	httpServer := http.NewServer(cfg, logger, runner, sessions, logBuffer)
+	// Create HTTP server (health + internal reload only)
+	httpServer := http.NewServer(cfg, logger, logBuffer)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -201,6 +201,11 @@ func runGateway(cmd *cobra.Command, args []string) error {
 	// 注入 channel reload 回调
 	httpServer.SetReloadChannels(func(reloadCtx context.Context) (*http.ChannelReloadResult, error) {
 		return reloadChannels(reloadCtx, ctx, cfg, runner, sessions, logger, &feishuCh)
+	})
+
+	// 注入 channel 运行时状态查询回调
+	httpServer.SetGetChannelStatus(func() *http.ChannelStatusResult {
+		return getChannelStatus(cfg, feishuCh)
 	})
 
 	// 启动 HTTP server，检测端口绑定是否成功
@@ -275,6 +280,7 @@ func startFeishuChannel(
 		EncryptKey:   cfg.Channels.Feishu.EncryptKey,
 		AllowedUsers: cfg.Channels.Feishu.AllowedUsers,
 		AllowedChats: cfg.Channels.Feishu.AllowedChats,
+		BotName:      cfg.Channels.Feishu.BotName,
 	}, logger)
 
 	ch.SetMessageHandler(func(msgCtx context.Context, msg *feishu.ParsedMessage) (string, error) {
@@ -303,6 +309,10 @@ func reloadChannels(
 	if err != nil {
 		return nil, fmt.Errorf("reload config: %w", err)
 	}
+
+	// 覆写前保存旧的 feishu 配置，用于后续比较是否需要重启
+	oldFeishuCfg := cfg.Channels.Feishu
+
 	// 更新内存中的配置
 	*cfg = *newCfg
 
@@ -335,13 +345,11 @@ func reloadChannels(
 		result.Channels["feishu"] = status
 
 	default:
-		// 已有 channel：检查是否需要重连或仅更新白名单
-		oldID := feishuCh.ID()
+		// 已有 channel：用旧配置与新配置比较，判断是否需要重启
 		needRestart := false
-
-		// 核心连接参数变更 → 需要重启
-		if feishuCfg.AppID != cfg.Channels.Feishu.AppID ||
-			feishuCfg.AppSecret != cfg.Channels.Feishu.AppSecret {
+		if oldFeishuCfg == nil ||
+			feishuCfg.AppID != oldFeishuCfg.AppID ||
+			feishuCfg.AppSecret != oldFeishuCfg.AppSecret {
 			needRestart = true
 		}
 
@@ -360,12 +368,33 @@ func reloadChannels(
 			feishuCh.UpdateAllowlist(feishuCfg.AllowedUsers, feishuCfg.AllowedChats)
 			result.Reloaded = append(result.Reloaded, "feishu:updated")
 			result.Channels["feishu"] = http.ChannelStatus{Status: "running"}
-			_ = oldID // suppress unused
 		}
 	}
 
 	logger.Info("channel reload complete", "reloaded", result.Reloaded)
 	return result, nil
+}
+
+// getChannelStatus 收集各 channel 的运行时状态
+func getChannelStatus(cfg *config.Config, feishuCh *feishu.FeishuChannel) *http.ChannelStatusResult {
+	result := &http.ChannelStatusResult{
+		Channels: make(map[string]http.ChannelStatus),
+	}
+
+	// Feishu
+	if cfg.Channels.Feishu != nil && cfg.Channels.Feishu.AppID != "" {
+		if feishuCh == nil {
+			result.Channels["feishu"] = http.ChannelStatus{Status: "error", Error: "channel not started"}
+		} else if feishuCh.IsBound() {
+			result.Channels["feishu"] = http.ChannelStatus{Status: "running"}
+		} else {
+			result.Channels["feishu"] = http.ChannelStatus{Status: "waiting_bind", BindCode: feishuCh.BindCode()}
+		}
+	}
+
+	// TODO: 后续扩展其他 channel（Telegram / Discord / Slack 等）
+
+	return result
 }
 
 // processFeishuMsg 处理飞书消息：会话路由 → 构建历史 → 调用 Agent → 返回回复

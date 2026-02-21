@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"runtime"
 	"strconv"
 	"strings"
@@ -57,6 +58,7 @@ const (
 	ansiGreen  = "\033[32m"
 	ansiYellow = "\033[33m"
 	ansiGray   = "\033[90m"
+	ansiRed     = "\033[31m"
 	ansiMagenta = "\033[38;5;99m"
 )
 
@@ -77,6 +79,7 @@ func init() {
 
 func runOnboard(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
+	configExists := err == nil
 	if err != nil {
 		cfg = config.Default()
 	}
@@ -93,7 +96,7 @@ func runOnboard(cmd *cobra.Command, args []string) error {
 	if onboardInteractive {
 		return runWizard(cfg)
 	}
-	return runQuickSetup(cfg)
+	return runQuickSetup(cmd, cfg, configExists)
 }
 
 func runWizard(cfg *config.Config) error {
@@ -103,11 +106,10 @@ func runWizard(cfg *config.Config) error {
 	fmt.Println()
 
 	if isGatewayRunning(cfg) {
-		fmt.Printf("    🟢 Process:       %s\n", green(fmt.Sprintf("running (port %d)", cfg.Gateway.Port)))
+		fmt.Printf("  🟢 Process:   %s\n", green(fmt.Sprintf("running (port %d)", cfg.Gateway.Port)))
 	} else {
-		fmt.Printf("    ⚪ Process:       %s\n", gray("not running"))
+		fmt.Printf("  ⚪ Process:   %s\n", gray("not running"))
 	}
-	fmt.Println()
 
 	printStep(1, 9, "Workspace Setup")
 	workspace := setupWorkspace()
@@ -121,9 +123,10 @@ func runWizard(cfg *config.Config) error {
 		providerCfg.APIKey = apiKey
 	}
 	providerCfg.BaseURL = providerDefaultBaseURL(provider)
-	cfg.Agent.Providers = map[string]config.ProviderConfig{
-		provider: providerCfg,
+	if cfg.Agent.Providers == nil {
+		cfg.Agent.Providers = make(map[string]config.ProviderConfig)
 	}
+	cfg.Agent.Providers[provider] = providerCfg
 
 	printStep(3, 9, "Channels (How You Talk to HighClaw)")
 	cfg.Channels = setupChannels(cfg.Channels)
@@ -184,44 +187,58 @@ func runChannelsRepairWizard(cfg *config.Config) error {
 	return nil
 }
 
-func runQuickSetup(cfg *config.Config) error {
+func runQuickSetup(cmd *cobra.Command, cfg *config.Config, configExists bool) error {
 	fmt.Print(cyan(wizardBanner))
-	fmt.Println("  " + bold("Quick Setup — generating config with sensible defaults..."))
+	fmt.Println("  " + bold("Quick Setup \u2014 generating config with sensible defaults..."))
 	fmt.Println()
 
 	provider := strings.TrimSpace(onboardProvider)
 	if provider == "" {
 		provider = "openrouter"
 	}
-	model := strings.TrimSpace(onboardModel)
-	if model == "" {
-		model = defaultModelForProvider(provider)
+
+	// \u7528\u6237\u663e\u5f0f\u4f20\u53c2\u6216\u9996\u6b21\u521b\u5efa\u65f6\uff0c\u66f4\u65b0 provider/model\uff1b\u5426\u5219\u4fdd\u7559\u5df2\u6709\u914d\u7f6e
+	explicitProvider := cmd.Flags().Changed("provider") || cmd.Flags().Changed("api-key") || cmd.Flags().Changed("model")
+	if !configExists || explicitProvider {
+		model := strings.TrimSpace(onboardModel)
+		if model == "" {
+			model = defaultModelForProvider(provider)
+		}
+		cfg.Agent.Model = provider + "/" + model
+		providerCfg := config.ProviderConfig{
+			BaseURL: providerDefaultBaseURL(provider),
+		}
+		if strings.TrimSpace(onboardAPIKey) != "" {
+			providerCfg.APIKey = strings.TrimSpace(onboardAPIKey)
+		}
+		// merge \u800c\u975e\u66ff\u6362\uff1a\u4fdd\u7559\u5df2\u6709\u7684\u5176\u4ed6 provider \u94a5\u5319
+		if cfg.Agent.Providers == nil {
+			cfg.Agent.Providers = make(map[string]config.ProviderConfig)
+		}
+		cfg.Agent.Providers[provider] = providerCfg
+	}
+
+	if cfg.Agent.Workspace == "" {
+		cfg.Agent.Workspace = filepath.Join(config.ConfigDir(), "workspace")
 	}
 	mem := strings.TrimSpace(onboardMemory)
 	if mem == "" {
 		mem = "sqlite"
 	}
-	cfg.Agent.Workspace = filepath.Join(config.ConfigDir(), "workspace")
-	cfg.Agent.Model = provider + "/" + model
-	providerCfg := config.ProviderConfig{
-		BaseURL: providerDefaultBaseURL(provider),
+	if !configExists {
+		cfg.Memory = memoryConfigForBackend(mem, mem != "none")
 	}
-	if strings.TrimSpace(onboardAPIKey) != "" {
-		providerCfg.APIKey = strings.TrimSpace(onboardAPIKey)
-	}
-	cfg.Agent.Providers = map[string]config.ProviderConfig{
-		provider: providerCfg,
-	}
-	cfg.Memory = memoryConfigForBackend(mem, mem != "none")
 	if cfg.Gateway.Port == 0 {
 		cfg.Gateway.Port = 8080
 	}
 	if cfg.Autonomy.Level == "" {
 		cfg.Autonomy.Level = "supervised"
 	}
-	cfg.Secrets.Encrypt = true
-	cfg.Tunnel.Provider = "none"
-	cfg.Composio.Enabled = false
+	if !configExists {
+		cfg.Secrets.Encrypt = true
+		cfg.Tunnel.Provider = "none"
+		cfg.Composio.Enabled = false
+	}
 	cfg.Channels.CLI = true
 
 	defaultCtx := projectContext{
@@ -238,95 +255,247 @@ func runQuickSetup(cfg *config.Config) error {
 		return fmt.Errorf("save config: %w", err)
 	}
 
-	check := green("✓")
+	check := green("\u2713")
 	fmt.Printf("  %s Created %s files, skipped %s existing | %s subdirectories\n", check, green(fmt.Sprintf("%d", createdFiles)), gray(fmt.Sprintf("%d", skippedFiles)), green("5"))
+
+	// \u8fdb\u7a0b\u72b6\u6001\uff08\u5728 Workspace layout \u4e0a\u65b9\uff09
+	fmt.Println()
+	if isGatewayRunning(cfg) {
+		fmt.Printf("  \U0001f7e2 Process:   %s\n", green(fmt.Sprintf("running (port %d)", cfg.Gateway.Port)))
+	} else {
+		fmt.Printf("  \u26aa Process:   %s\n", gray("not running"))
+	}
+
 	printWorkspaceTree(ws)
 
-	// 进程状态（在 Workspace 信息上方）
-	if isGatewayRunning(cfg) {
-		fmt.Printf("    🟢 Process:       %s\n", green(fmt.Sprintf("running (port %d)", cfg.Gateway.Port)))
-	} else {
-		fmt.Printf("    ⚪ Process:       %s\n", gray("not running"))
-	}
-	fmt.Println()
-
 	fmt.Printf("  %s Workspace:  %s\n", check, green(ws))
-	fmt.Printf("  %s Provider:   %s\n", check, green(provider))
-	fmt.Printf("  %s Model:      %s\n", check, green(model))
-	if strings.TrimSpace(onboardAPIKey) == "" {
-		fmt.Printf("  %s API Key:    %s\n", check, yellow("not set (use --api-key or edit config.yaml)"))
-	} else {
-		fmt.Printf("  %s API Key:    %s\n", check, green("set"))
-	}
+	fmt.Printf("  %s Model:      %s\n", check, green(cfg.Agent.Model))
+	printProviderKeys(cfg, "  ", check)
 	fmt.Printf("  %s Security:   %s\n", check, green("Supervised (workspace-scoped)"))
 	fmt.Printf("  %s Memory:     %s %s\n", check, green(cfg.Memory.Backend), gray(fmt.Sprintf("(auto-save: %s)", onOff(cfg.Memory.AutoSave))))
 	fmt.Printf("  %s Secrets:    %s\n", check, green("encrypted"))
-	fmt.Printf("  %s Gateway:    %s\n", check, green(fmt.Sprintf("pairing required (127.0.0.1:%d)", cfg.Gateway.Port)))
-	fmt.Printf("  %s Tunnel:     %s\n", check, gray("none (local only)"))
-	fmt.Printf("  %s Composio:   %s\n", check, gray("disabled (sovereign mode)"))
 	fmt.Printf("  %s Channels:   %s\n", check, green(channelsSummary(cfg.Channels)))
+	printChannelDetails(cfg, cfg.Gateway.Port)
+	fmt.Printf("  %s Gateway:    %s\n", check, green(fmt.Sprintf("pairing required (127.0.0.1:%d)", cfg.Gateway.Port)))
+	if cfg.Tunnel.Provider == "" || cfg.Tunnel.Provider == "none" {
+		fmt.Printf("  %s Tunnel:     %s\n", check, gray("none (local only)"))
+	} else {
+		fmt.Printf("  %s Tunnel:     %s\n", check, green(cfg.Tunnel.Provider))
+	}
+	if cfg.Composio.Enabled {
+		fmt.Printf("  %s Composio:   %s\n", check, green("enabled (1000+ OAuth apps)"))
+	} else {
+		fmt.Printf("  %s Composio:   %s\n", check, gray("disabled (sovereign mode)"))
+	}
 	fmt.Println()
 	fmt.Printf("  %s %s\n", bold("Config saved:"), green(config.ConfigPath()))
 	fmt.Println()
 
-	gatewayRunning := isGatewayRunning(cfg)
-	hasChannels := hasConfiguredChannels(cfg.Channels)
-
-	if gatewayRunning {
-		fmt.Printf("  ⚠️  %s\n", bold("Gateway is running — new config will reload automatically"))
-		fmt.Println()
-		fmt.Println("  " + bold("Try now:"))
-		fmt.Println()
-		if hasChannels {
-			fmt.Printf("    %s Send a message to chat\n", cyan("1."))
-		} else {
-			fmt.Printf("    %s Add a channel and send a bind verification code message to chat\n", cyan("1."))
-		}
-		fmt.Println("       📱 Telegram   💬 Discord    🔔 Slack")
-		fmt.Println("       💻 iMessage   🔗 Matrix     📞 WhatsApp")
-		fmt.Println("       📧 IRC        🌐 Webhook    🐦 Feishu")
-		fmt.Println("       🏢 WeCom     💚 WeChat")
-		fmt.Println()
-		fmt.Printf("    %s Start interactive TUI mode:\n", cyan("2."))
-		fmt.Printf("       %s\n", magenta("highclaw tui"))
-		fmt.Println()
-		fmt.Printf("    %s Check full status:\n", cyan("3."))
-		fmt.Printf("       %s\n", magenta("highclaw status"))
-		fmt.Println()
-		fmt.Printf("    %s Key APIs %s:\n", cyan("4."), gray(fmt.Sprintf("(localhost:%d)", cfg.Gateway.Port)))
-		fmt.Printf("       🔌 %s  — AI conversation\n", magenta("POST /api/chat"))
-		fmt.Printf("       📊 %s — system status\n", magenta("GET  /api/status"))
-		fmt.Printf("       🔄 %s — channel health\n", magenta("GET  /api/channels/status"))
-		fmt.Println()
-	} else {
-		fmt.Println("  " + bold("Next steps:"))
-		fmt.Println()
-		step := 1
-		if strings.TrimSpace(onboardAPIKey) == "" {
-			fmt.Printf("    %s Set your API key:\n", cyan(fmt.Sprintf("%d.", step)))
-			fmt.Printf("       %s\n\n", magenta(fmt.Sprintf("export %s=\"sk-...\"", providerEnvVar(provider))))
-			step++
-		}
-		fmt.Printf("    %s Send a quick message:\n", cyan(fmt.Sprintf("%d.", step)))
-		fmt.Printf("       %s\n", magenta("highclaw agent -m \"Hello, HighClaw!\""))
-		fmt.Println()
+	fmt.Println("  " + bold("Next steps:"))
+	step := 1
+	if !hasAPIKey(cfg, modelProvider(cfg.Agent.Model)) {
+		fmt.Printf("    %s Set your API key:  %s\n", cyan(fmt.Sprintf("%d.", step)), magenta(fmt.Sprintf("export %s=\"sk-...\"", providerEnvVar(modelProvider(cfg.Agent.Model)))))
 		step++
-		fmt.Printf("    %s Start interactive CLI mode:\n", cyan(fmt.Sprintf("%d.", step)))
-		fmt.Printf("       %s\n", magenta("highclaw agent"))
-		fmt.Println()
-		step++
-		fmt.Printf("    %s Check full status:\n", cyan(fmt.Sprintf("%d.", step)))
-		fmt.Printf("       %s\n", magenta("highclaw status"))
-		fmt.Println()
-		step++
-		fmt.Printf("    %s Start the gateway (channels + AI + API):\n", cyan(fmt.Sprintf("%d.", step)))
-		fmt.Printf("       %s\n", magenta("highclaw gateway"))
-		fmt.Println()
 	}
-	fmt.Println("  ⚡ Happy hacking! 🦀")
+	fmt.Printf("    %s Chat:              %s\n", cyan(fmt.Sprintf("%d.", step)), magenta("highclaw agent -m \"Hello!\""))
+	step++
+	fmt.Printf("    %s Interactive mode:  %s\n", cyan(fmt.Sprintf("%d.", step)), magenta("highclaw agent"))
+	step++
+	fmt.Printf("    %s Full setup:        %s\n", cyan(fmt.Sprintf("%d.", step)), magenta("highclaw onboard --interactive"))
+	step++
+	fmt.Printf("    %s Start gateway:     %s\n", cyan(fmt.Sprintf("%d.", step)), magenta("highclaw gateway"))
 	fmt.Println()
 
 	return nil
+}
+
+// channelRuntimeTag 根据运行时状态返回状态标签
+// runtimeStatus 可为 nil（gateway 未运行时传 nil）
+func channelRuntimeTag(name string, runtimeStatus map[string]channelRuntimeInfo) string {
+	if runtimeStatus == nil {
+		return gray("  \u2714 configured")
+	}
+	info, ok := runtimeStatus[name]
+	if !ok {
+		return gray("  \u2714 configured")
+	}
+	switch info.Status {
+	case "running":
+		return green("  \U0001f7e2 running")
+	case "waiting_bind":
+		tag := yellow("  \U0001f7e1 waiting bind")
+		if info.BindCode != "" {
+			tag += yellow(fmt.Sprintf(" (code: %s)", info.BindCode))
+		}
+		return tag
+	case "error":
+		msg := "error"
+		if info.Error != "" {
+			msg = info.Error
+		}
+		return red("  \U0001f534 " + msg)
+	default:
+		return gray("  \u2714 " + info.Status)
+	}
+}
+
+// channelRuntimeInfo 存储从 gateway API 获取的 channel 运行时状态
+type channelRuntimeInfo struct {
+	Status   string
+	BindCode string
+	Error    string
+}
+
+// fetchChannelStatus 尝试从运行中的 gateway 获取 channel 运行时状态
+// 返回 nil 表示 gateway 不可达
+func fetchChannelStatus(port int) map[string]channelRuntimeInfo {
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/internal/channel-status", port)
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil
+	}
+
+	var body struct {
+		Channels map[string]struct {
+			Status   string `json:"status"`
+			BindCode string `json:"bindCode"`
+			Error    string `json:"error"`
+		} `json:"channels"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil
+	}
+
+	result := make(map[string]channelRuntimeInfo, len(body.Channels))
+	for name, ch := range body.Channels {
+		result[name] = channelRuntimeInfo{Status: ch.Status, BindCode: ch.BindCode, Error: ch.Error}
+	}
+	return result
+}
+
+// printChannelDetails 输出已配置 channel 的详细信息（类型、脱敏凭证、白名单 + 运行时状态）
+// gatewayPort > 0 时尝试查询运行时状态
+func printChannelDetails(cfg *config.Config, gatewayPort int) {
+	var runtimeStatus map[string]channelRuntimeInfo
+	if gatewayPort > 0 {
+		runtimeStatus = fetchChannelStatus(gatewayPort)
+	}
+
+	if cfg.Channels.Telegram != nil {
+		fmt.Printf("       \U0001f4f1 Telegram  type: bot-api  users: %s%s\n", formatAllowlist(cfg.Channels.Telegram.AllowedUsers), channelRuntimeTag("telegram", runtimeStatus))
+	}
+	if cfg.Channels.Discord != nil {
+		fmt.Printf("       \U0001f4ac Discord   type: bot-ws   users: %s%s\n", formatAllowlist(cfg.Channels.Discord.AllowedUsers), channelRuntimeTag("discord", runtimeStatus))
+	}
+	if cfg.Channels.Slack != nil {
+		fmt.Printf("       \U0001f514 Slack     type: bot-ws   users: %s%s\n", formatAllowlist(cfg.Channels.Slack.AllowedUsers), channelRuntimeTag("slack", runtimeStatus))
+	}
+	if cfg.Channels.IMessage != nil {
+		fmt.Printf("       \U0001f4bb iMessage  type: applescript  contacts: %s%s\n", formatAllowlist(cfg.Channels.IMessage.AllowedContacts), channelRuntimeTag("imessage", runtimeStatus))
+	}
+	if cfg.Channels.Matrix != nil {
+		fmt.Printf("       \U0001f517 Matrix    type: client   room: %s  users: %s%s\n", maskToken(cfg.Channels.Matrix.RoomID, 8), formatAllowlist(cfg.Channels.Matrix.AllowedUsers), channelRuntimeTag("matrix", runtimeStatus))
+	}
+	if cfg.Channels.WhatsApp != nil {
+		fmt.Printf("       \U0001f4de WhatsApp  type: cloud-api  phone: %s  users: %s%s\n", maskToken(cfg.Channels.WhatsApp.PhoneNumberID, 6), formatAllowlist(cfg.Channels.WhatsApp.AllowedNumbers), channelRuntimeTag("whatsapp", runtimeStatus))
+	}
+	if cfg.Channels.IRC != nil {
+		fmt.Printf("       \U0001f4e7 IRC       type: tls      server: %s:%d  nick: %s%s\n", cfg.Channels.IRC.Server, cfg.Channels.IRC.Port, cfg.Channels.IRC.Nickname, channelRuntimeTag("irc", runtimeStatus))
+	}
+	if cfg.Channels.Webhook != nil {
+		fmt.Printf("       \U0001f310 Webhook   type: http     port: %d%s\n", cfg.Channels.Webhook.Port, channelRuntimeTag("webhook", runtimeStatus))
+	}
+	if cfg.Channels.Feishu != nil {
+		botLabel := ""
+		if cfg.Channels.Feishu.BotName != "" {
+			botLabel = fmt.Sprintf("  bot: %s", cfg.Channels.Feishu.BotName)
+		}
+		fmt.Printf("       \U0001f426 Feishu    type: feishu-ws  appId: %s  users: %s%s%s\n", maskToken(cfg.Channels.Feishu.AppID, 8), formatAllowlist(cfg.Channels.Feishu.AllowedUsers), botLabel, channelRuntimeTag("feishu", runtimeStatus))
+	}
+	if cfg.Channels.WeCom != nil {
+		fmt.Printf("       \U0001f3e2 WeCom     type: wecom-sdk  corpId: %s  users: %s%s\n", maskToken(cfg.Channels.WeCom.CorpID, 8), formatAllowlist(cfg.Channels.WeCom.AllowedUsers), channelRuntimeTag("wecom", runtimeStatus))
+	}
+	if cfg.Channels.WeChat != nil {
+		mode := cfg.Channels.WeChat.Mode
+		if mode == "" {
+			mode = "official"
+		}
+		fmt.Printf("       \U0001f49a WeChat    type: %s  users: %s%s\n", mode, formatAllowlist(cfg.Channels.WeChat.AllowedUsers), channelRuntimeTag("wechat", runtimeStatus))
+	}
+}
+
+// formatAllowlist 格式化白名单显示
+func formatAllowlist(users []string) string {
+	if len(users) == 0 {
+		return "(empty \u2014 bind required)"
+	}
+	if len(users) == 1 && users[0] == "*" {
+		return "* (all)"
+	}
+	return fmt.Sprintf("%d user(s)", len(users))
+}
+
+// maskToken 脱敏凭证：保留前 prefix 个字符 + "***"
+func maskToken(s string, prefix int) string {
+	if len(s) <= prefix {
+		return s
+	}
+	return s[:prefix] + "***"
+}
+
+// printProviderKeys 展示所有已配置的 provider 钥匙串，标记当前使用的 provider。
+// indent 是每行前缀缩进（如 "  " 或 "    "）。
+func printProviderKeys(cfg *config.Config, indent string, icon string) {
+	activeProvider := modelProvider(cfg.Agent.Model)
+	activeModel := modelName(cfg.Agent.Model)
+
+	if len(cfg.Agent.Providers) == 0 {
+		fmt.Printf("%s%s Providers:  %s\n", indent, icon, yellow("none configured"))
+		return
+	}
+
+	// 收集并排序 provider 名（当前使用的排第一）
+	names := make([]string, 0, len(cfg.Agent.Providers))
+	for name := range cfg.Agent.Providers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	fmt.Printf("%s%s Providers:  %s\n", indent, icon, digitEmoji(len(names)))
+	for _, name := range names {
+		pcfg := cfg.Agent.Providers[name]
+		keyDisplay := gray("(no key)")
+		if k := strings.TrimSpace(pcfg.APIKey); k != "" {
+			keyDisplay = maskToken(k, 10)
+		} else {
+			// 检查环境变量
+			envVar := providerEnvVar(name)
+			if v := strings.TrimSpace(os.Getenv(envVar)); v != "" {
+				keyDisplay = maskToken(v, 10) + gray(" (env: "+envVar+")")
+			}
+		}
+
+		if name == activeProvider {
+			fmt.Printf("%s   %s %-14s %s  %s\n", indent, green("\u2713"), green(name), keyDisplay, cyan("\u2190 current: "+activeModel))
+		} else {
+			fmt.Printf("%s     %-14s %s\n", indent, name, keyDisplay)
+		}
+	}
+
+	// 当前使用的 provider 不在 providers map 中（可能只靠环境变量）
+	if _, ok := cfg.Agent.Providers[activeProvider]; !ok {
+		envVar := providerEnvVar(activeProvider)
+		keyDisplay := yellow("(no key)")
+		if v := strings.TrimSpace(os.Getenv(envVar)); v != "" {
+			keyDisplay = maskToken(v, 10) + gray(" (env: "+envVar+")")
+		}
+		fmt.Printf("%s   %s %-14s %s  %s\n", indent, yellow("!"), yellow(activeProvider), keyDisplay, cyan("\u2190 current: "+activeModel+" (not in config)"))
+	}
 }
 
 func setupWorkspace() string {
@@ -484,17 +653,17 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 	out.CLI = true
 	for {
 		options := []string{
-			statusLineWithText("Telegram", channelState(out.Telegram != nil, "✅ connected", "— connect your bot")),
-			statusLineWithText("Discord", channelState(out.Discord != nil, "✅ connected", "— connect your bot")),
-			statusLineWithText("Slack", channelState(out.Slack != nil, "✅ connected", "— connect your bot")),
+			statusLineWithText("Telegram", channelState(out.Telegram != nil, "✅ configured", "— connect your bot")),
+			statusLineWithText("Discord", channelState(out.Discord != nil, "✅ configured", "— connect your bot")),
+			statusLineWithText("Slack", channelState(out.Slack != nil, "✅ configured", "— connect your bot")),
 			statusLineWithText("iMessage", channelState(out.IMessage != nil, "✅ configured", "— macOS only")),
-			statusLineWithText("Matrix", channelState(out.Matrix != nil, "✅ connected", "— self-hosted chat")),
-			statusLineWithText("WhatsApp", channelState(out.WhatsApp != nil, "✅ connected", "— Business Cloud API")),
+			statusLineWithText("Matrix", channelState(out.Matrix != nil, "✅ configured", "— self-hosted chat")),
+			statusLineWithText("WhatsApp", channelState(out.WhatsApp != nil, "✅ configured", "— Business Cloud API")),
 			statusLineWithText("IRC", channelState(out.IRC != nil, "✅ configured", "— IRC over TLS")),
 			statusLineWithText("Webhook", channelState(out.Webhook != nil, "✅ configured", "— HTTP endpoint")),
-			statusLineWithText("Feishu", channelState(out.Feishu != nil, "✅ connected", "— Enterprise collaboration platform")),
-			statusLineWithText("WeCom", channelState(out.WeCom != nil, "✅ connected", "— Enterprise messaging")),
-			statusLineWithText("WeChat", channelState(out.WeChat != nil, "✅ connected", "— Official Account / Personal")),
+			statusLineWithText("Feishu", channelState(out.Feishu != nil, "✅ configured", "— Enterprise collaboration platform")),
+			statusLineWithText("WeCom", channelState(out.WeCom != nil, "✅ configured", "— Enterprise messaging")),
+			statusLineWithText("WeChat", channelState(out.WeChat != nil, "✅ configured", "— Official Account / Personal")),
 			"Done — finish setup",
 		}
 		choice := promptSelect("Connect a channel (or Done to continue)", options, 11)
@@ -503,13 +672,21 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 		case 0:
 			fmt.Println()
 			fmt.Println("  Telegram Setup — talk to HighClaw from Telegram")
+			if out.Telegram != nil {
+				fmt.Println("  ℹ️  Current: configured (leave empty to remove)")
+			}
 			printBullet("1. Open Telegram and message @BotFather")
 			printBullet("2. Send /newbot and follow the prompts")
 			printBullet("3. Copy the bot token and paste it below")
 			fmt.Println()
 			tok := strings.TrimSpace(promptString("Bot token (from @BotFather)", ""))
 			if tok == "" {
-				fmt.Println("  → Skipped")
+				if out.Telegram != nil {
+					out.Telegram = nil
+					fmt.Println("  ✅ Telegram removed")
+				} else {
+					fmt.Println("  → Skipped")
+				}
 				continue
 			}
 			fmt.Print("  ⏳ Testing connection... ")
@@ -531,6 +708,9 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 		case 1:
 			fmt.Println()
 			fmt.Println("  Discord Setup — talk to HighClaw from Discord")
+			if out.Discord != nil {
+				fmt.Println("  ℹ️  Current: configured (leave empty to remove)")
+			}
 			printBullet("1. Go to https://discord.com/developers/applications")
 			printBullet("2. Create a New Application → Bot → Copy token")
 			printBullet("3. Enable MESSAGE CONTENT intent under Bot settings")
@@ -538,7 +718,12 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 			fmt.Println()
 			tok := strings.TrimSpace(promptString("Bot token", ""))
 			if tok == "" {
-				fmt.Println("  → Skipped")
+				if out.Discord != nil {
+					out.Discord = nil
+					fmt.Println("  ✅ Discord removed")
+				} else {
+					fmt.Println("  → Skipped")
+				}
 				continue
 			}
 			fmt.Print("  ⏳ Testing connection... ")
@@ -560,13 +745,21 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 		case 2:
 			fmt.Println()
 			fmt.Println("  Slack Setup — talk to HighClaw from Slack")
+			if out.Slack != nil {
+				fmt.Println("  ℹ️  Current: configured (leave empty to remove)")
+			}
 			printBullet("1. Go to https://api.slack.com/apps → Create New App")
 			printBullet("2. Add Bot Token Scopes: chat:write, channels:history")
 			printBullet("3. Install to workspace and copy the Bot Token")
 			fmt.Println()
 			bot := strings.TrimSpace(promptString("Bot token (xoxb-...)", ""))
 			if bot == "" {
-				fmt.Println("  → Skipped")
+				if out.Slack != nil {
+					out.Slack = nil
+					fmt.Println("  ✅ Slack removed")
+				} else {
+					fmt.Println("  → Skipped")
+				}
 				continue
 			}
 			fmt.Print("  ⏳ Testing connection... ")
@@ -589,6 +782,9 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 		case 3:
 			fmt.Println()
 			fmt.Println("  iMessage Setup — macOS only, reads from Messages.app")
+			if out.IMessage != nil {
+				fmt.Println("  ℹ️  Current: configured (leave empty to remove)")
+			}
 			if runtimeGOOS() != "darwin" {
 				fmt.Println("  ⚠ iMessage is only available on macOS.")
 				continue
@@ -596,13 +792,25 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 			printBullet("HighClaw reads your iMessage database and replies via AppleScript.")
 			printBullet("You need to grant Full Disk Access to your terminal in System Settings.")
 			fmt.Println()
-			contacts := parseCSV(promptString("Allowed contacts (comma-separated phone/email, or * for all)", "*"))
+			contacts := parseCSV(promptString("Allowed contacts (comma-separated phone/email, * for all, Enter to skip)", ""))
+			if len(contacts) == 0 {
+				if out.IMessage != nil {
+					out.IMessage = nil
+					fmt.Println("  ✅ iMessage removed")
+				} else {
+					fmt.Println("  → Skipped")
+				}
+				continue
+			}
 			out.IMessage = &config.IMessageConfig{AllowedContacts: contacts}
 			fmt.Println("  ✅ iMessage configured")
 			fmt.Println()
 		case 4:
 			fmt.Println()
 			fmt.Println("  Matrix Setup — self-hosted, federated chat")
+			if out.Matrix != nil {
+				fmt.Println("  ℹ️  Current: configured (leave empty to remove)")
+			}
 			printBullet("You need a Matrix account and an access token.")
 			printBullet("Get a token via Element → Settings → Help & About → Access Token.")
 			fmt.Println()
@@ -611,7 +819,12 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 			room := strings.TrimSpace(promptString("Room ID (e.g. !abc123:matrix.org)", ""))
 			users := parseCSV(promptString("Allowed users (comma-separated @user:server, or * for all)", "*"))
 			if home == "" || token == "" || room == "" {
-				fmt.Println("  → Skipped")
+				if out.Matrix != nil {
+					out.Matrix = nil
+					fmt.Println("  ✅ Matrix removed")
+				} else {
+					fmt.Println("  → Skipped")
+				}
 				continue
 			}
 			fmt.Print("  ⏳ Testing connection... ")
@@ -626,6 +839,9 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 		case 5:
 			fmt.Println()
 			fmt.Println("  WhatsApp Setup — Business Cloud API")
+			if out.WhatsApp != nil {
+				fmt.Println("  ℹ️  Current: configured (leave empty to remove)")
+			}
 			printBullet("1. Go to developers.facebook.com and create a WhatsApp app")
 			printBullet("2. Add the WhatsApp product and get your phone number ID")
 			printBullet("3. Generate a temporary access token (System User)")
@@ -635,7 +851,12 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 			pid := strings.TrimSpace(promptString("Phone number ID (from WhatsApp app settings)", ""))
 			vt := strings.TrimSpace(promptString("Webhook verify token (create your own)", "highclaw-whatsapp-verify"))
 			if at == "" || pid == "" {
-				fmt.Println("  → Skipped")
+				if out.WhatsApp != nil {
+					out.WhatsApp = nil
+					fmt.Println("  ✅ WhatsApp removed")
+				} else {
+					fmt.Println("  → Skipped")
+				}
 				continue
 			}
 			fmt.Print("  ⏳ Testing connection... ")
@@ -650,6 +871,9 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 		case 6:
 			fmt.Println()
 			fmt.Println("  IRC Setup — IRC over TLS")
+			if out.IRC != nil {
+				fmt.Println("  ℹ️  Current: configured (leave empty to remove)")
+			}
 			printBullet("IRC connects over TLS to any IRC server")
 			printBullet("Supports SASL PLAIN and NickServ authentication")
 			fmt.Println()
@@ -659,7 +883,12 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 			chs := parseCSV(promptString("Channels to join (comma-separated: #channel1,#channel2)", ""))
 			users := parseCSV(promptString("Allowed nicknames (comma-separated, or * for all)", ""))
 			if server == "" || nick == "" {
-				fmt.Println("  → Skipped")
+				if out.IRC != nil {
+					out.IRC = nil
+					fmt.Println("  ✅ IRC removed")
+				} else {
+					fmt.Println("  → Skipped")
+				}
 				continue
 			}
 			port, _ := strconv.Atoi(portStr)
@@ -680,7 +909,19 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 		case 7:
 			fmt.Println()
 			fmt.Println("  Webhook Setup — HTTP endpoint for custom integrations")
-			portStr := strings.TrimSpace(promptString("Port", "8080"))
+			if out.Webhook != nil {
+				fmt.Println("  ℹ️  Current: configured (leave empty to remove)")
+			}
+			portStr := strings.TrimSpace(promptString("Port (default 8080, Enter to skip/remove)", ""))
+			if portStr == "" {
+				if out.Webhook != nil {
+					out.Webhook = nil
+					fmt.Println("  ✅ Webhook removed")
+				} else {
+					fmt.Println("  → Skipped")
+				}
+				continue
+			}
 			sec := strings.TrimSpace(promptString("Secret (optional, Enter to skip)", ""))
 			port, _ := strconv.Atoi(portStr)
 			if port == 0 {
@@ -691,31 +932,55 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 		case 8:
 			fmt.Println()
 			fmt.Println("  Feishu Setup — Connect to Feishu/Lark")
+			if out.Feishu != nil {
+				fmt.Println("  ℹ️  Current: configured (leave empty to remove)")
+			}
 			printBullet("1. Visit https://open.feishu.cn/app to create a custom app")
 			printBullet("2. Add Bot capability, get App ID and App Secret")
 			printBullet("3. Configure event subscription Request URL and Encrypt Key")
 			fmt.Println()
-			appID := strings.TrimSpace(promptString("App ID", ""))
-			appSecret := strings.TrimSpace(promptString("App Secret", ""))
-			if appID == "" || appSecret == "" {
-				fmt.Println("  → Skipped")
-				continue
-			}
-			verifyToken := strings.TrimSpace(promptString("Verification Token (optional)", ""))
-			encryptKey := strings.TrimSpace(promptString("Encrypt Key (optional)", ""))
-			users := parseCSV(promptString("Allowed user IDs (comma-separated, * for all, Enter to skip)", ""))
-			out.Feishu = &config.FeishuConfig{
-				AppID:        appID,
-				AppSecret:    appSecret,
-				VerifyToken:  verifyToken,
-				EncryptKey:   encryptKey,
-				AllowedUsers: users,
-			}
-			fmt.Println("  ✅ Feishu configured")
-			fmt.Println()
+	appID := strings.TrimSpace(promptString("App ID", ""))
+	appSecret := strings.TrimSpace(promptString("App Secret", ""))
+	if appID == "" || appSecret == "" {
+		if out.Feishu != nil {
+			// 已有配置但留空 → 视为主动删除该 channel
+			out.Feishu = nil
+			fmt.Println("  ✅ Feishu removed")
+		} else {
+			fmt.Println("  → Skipped")
+		}
+		continue
+	}
+		fmt.Print("  ⏳ Verifying credentials... ")
+		feishuResult := testFeishu(appID, appSecret)
+		if !feishuResult.OK {
+			fmt.Println("\r  ❌ Verification failed — check your App ID and App Secret")
+			continue
+		}
+		if feishuResult.BotName != "" {
+			fmt.Printf("\r  ✅ Feishu credentials verified — bot: %s\n", feishuResult.BotName)
+		} else {
+			fmt.Println("\r  ✅ Feishu credentials verified")
+		}
+		verifyToken := strings.TrimSpace(promptString("Verification Token (optional)", ""))
+		encryptKey := strings.TrimSpace(promptString("Encrypt Key (optional)", ""))
+		users := parseCSV(promptString("Allowed user IDs (comma-separated, * for all, Enter to skip)", ""))
+		out.Feishu = &config.FeishuConfig{
+			AppID:        appID,
+			AppSecret:    appSecret,
+			VerifyToken:  verifyToken,
+			EncryptKey:   encryptKey,
+			AllowedUsers: users,
+			BotName:      feishuResult.BotName,
+		}
+		fmt.Println("  ✅ Feishu configured")
+		fmt.Println()
 		case 9:
 			fmt.Println()
 			fmt.Println("  WeCom Setup — Connect to WeCom")
+			if out.WeCom != nil {
+				fmt.Println("  ℹ️  Current: configured (leave empty to remove)")
+			}
 			printBullet("1. Visit https://work.weixin.qq.com admin console")
 			printBullet("2. Create a custom app, get Corp ID, Agent ID and Secret")
 			printBullet("3. Configure message server Token and EncodingAESKey")
@@ -723,10 +988,15 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 			corpID := strings.TrimSpace(promptString("Corp ID", ""))
 			agentIDStr := strings.TrimSpace(promptString("Agent ID", ""))
 			secret := strings.TrimSpace(promptString("Secret", ""))
-			if corpID == "" || secret == "" {
+		if corpID == "" || secret == "" {
+			if out.WeCom != nil {
+				out.WeCom = nil
+				fmt.Println("  ✅ WeCom removed")
+			} else {
 				fmt.Println("  → Skipped")
-				continue
 			}
+			continue
+		}
 			agentID, _ := strconv.Atoi(agentIDStr)
 			token := strings.TrimSpace(promptString("Token (optional)", ""))
 			encodingKey := strings.TrimSpace(promptString("EncodingAESKey (optional)", ""))
@@ -744,6 +1014,9 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 		case 10:
 			fmt.Println()
 			fmt.Println("  WeChat Setup — Connect Official Account or Personal")
+			if out.WeChat != nil {
+				fmt.Println("  ℹ️  Current: configured (leave empty to remove)")
+			}
 			printBullet("Official Account: requires verified service account")
 			printBullet("Personal: requires bridge service (e.g. wechaty)")
 			fmt.Println()
@@ -759,7 +1032,12 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 				appID := strings.TrimSpace(promptString("AppID", ""))
 				appSecret := strings.TrimSpace(promptString("AppSecret", ""))
 				if appID == "" || appSecret == "" {
-					fmt.Println("  → Skipped")
+					if out.WeChat != nil {
+						out.WeChat = nil
+						fmt.Println("  ✅ WeChat removed")
+					} else {
+						fmt.Println("  → Skipped")
+					}
 					continue
 				}
 				token := strings.TrimSpace(promptString("Token", ""))
@@ -780,7 +1058,12 @@ func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
 				fmt.Println()
 				bridgeURL := strings.TrimSpace(promptString("Bridge URL (e.g. http://localhost:8788)", ""))
 				if bridgeURL == "" {
-					fmt.Println("  → Skipped")
+					if out.WeChat != nil {
+						out.WeChat = nil
+						fmt.Println("  ✅ WeChat removed")
+					} else {
+						fmt.Println("  → Skipped")
+					}
 					continue
 				}
 				bridgeToken := strings.TrimSpace(promptString("Bridge Token (optional)", ""))
@@ -1021,20 +1304,16 @@ func printSummary(cfg *config.Config) {
 	fmt.Println("  " + gray("Configuration saved to:"))
 	fmt.Printf("    %s\n\n", green(config.ConfigPath()))
 	fmt.Println("  " + bold("Quick summary:"))
-	fmt.Printf("    🤖 Provider:      %s\n", green(modelProvider(cfg.Agent.Model)))
-	fmt.Printf("    🧠 Model:         %s\n", green(modelName(cfg.Agent.Model)))
+	fmt.Printf("    \U0001f9e0 Model:         %s\n", green(cfg.Agent.Model))
+	printProviderKeys(cfg, "    ", "\U0001f916")
 	autonomy := strings.TrimSpace(cfg.Autonomy.Level)
 	if autonomy != "" {
 		autonomy = strings.ToUpper(autonomy[:1]) + autonomy[1:]
 	}
-	fmt.Printf("    🛡️ Autonomy:      %s\n", green(autonomy))
-	fmt.Printf("    🧠 Memory:        %s (auto-save: %s)\n", green(cfg.Memory.Backend), onOff(cfg.Memory.AutoSave))
-	fmt.Printf("    📡 Channels:      %s\n", channelsSummary(cfg.Channels))
-	if hasAPIKey(cfg, modelProvider(cfg.Agent.Model)) {
-		fmt.Printf("    🔑 API Key:       %s\n", green("configured"))
-	} else {
-		fmt.Printf("    🔑 API Key:       %s\n", yellow("not set (set via env var or config)"))
-	}
+	fmt.Printf("    \U0001f6e1\ufe0f Autonomy:      %s\n", green(autonomy))
+	fmt.Printf("    \U0001f9e0 Memory:        %s (auto-save: %s)\n", green(cfg.Memory.Backend), onOff(cfg.Memory.AutoSave))
+	fmt.Printf("    \U0001f4e1 Channels:      %s\n", channelsSummary(cfg.Channels))
+	printChannelDetails(cfg, cfg.Gateway.Port)
 	if cfg.Tunnel.Provider == "" || cfg.Tunnel.Provider == "none" {
 		fmt.Println("    🌐 Tunnel:        none (local only)")
 	} else {
@@ -1285,6 +1564,10 @@ func providerDefaultBaseURL(provider string) string {
 		return "https://api.x.ai/v1"
 	case "perplexity":
 		return "https://api.perplexity.ai"
+	case "minimax":
+		return "https://api.minimax.io/anthropic/v1"
+	case "minimax-cn":
+		return "https://api.minimaxi.com/anthropic/v1"
 	case "gemini":
 		return "https://generativelanguage.googleapis.com/v1beta/openai"
 	}
@@ -1574,9 +1857,77 @@ func testWhatsApp(accessToken, phoneID string) bool {
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
-func statusLine(name string, connected bool, pending string) string {
-	if connected {
-		return fmt.Sprintf("%-10s %s", name, "✅ connected")
+// feishuTestResult 飞书凭证验证结果
+type feishuTestResult struct {
+	OK      bool
+	BotName string // 机器人中文名（验证成功时填充）
+}
+
+// testFeishu 验证飞书 App ID/Secret 并获取机器人名称
+func testFeishu(appID, appSecret string) feishuTestResult {
+	client := http.Client{Timeout: 8 * time.Second}
+
+	// 获取 tenant_access_token
+	tokenBody := fmt.Sprintf(`{"app_id":"%s","app_secret":"%s"}`, appID, appSecret)
+	resp, err := client.Post(
+		"https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+		"application/json",
+		strings.NewReader(tokenBody),
+	)
+	if err != nil {
+		return feishuTestResult{}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return feishuTestResult{}
+	}
+	var tokenResult map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&tokenResult)
+	code, _ := tokenResult["code"].(float64)
+	if code != 0 {
+		return feishuTestResult{}
+	}
+	token, _ := tokenResult["tenant_access_token"].(string)
+
+	// 凭证验证通过，尝试获取机器人信息
+	result := feishuTestResult{OK: true}
+	if token != "" {
+		result.BotName = fetchFeishuBotName(client, token)
+	}
+	return result
+}
+
+// fetchFeishuBotName 通过 tenant_access_token 获取飞书机器人中文名
+func fetchFeishuBotName(client http.Client, token string) string {
+	req, err := http.NewRequest(http.MethodGet, "https://open.feishu.cn/open-apis/bot/v3/info/", nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var info struct {
+		Code int `json:"code"`
+		Bot  struct {
+			AppName string `json:"app_name"`
+		} `json:"bot"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&info)
+	if info.Code == 0 {
+		return info.Bot.AppName
+	}
+	return ""
+}
+
+func statusLine(name string, configured bool, pending string) string {
+	if configured {
+		return fmt.Sprintf("%-10s %s", name, "✅ configured")
 	}
 	return fmt.Sprintf("%-10s %s", name, pending)
 }
@@ -1660,32 +2011,97 @@ func hasConfiguredChannels(c config.ChannelsConfig) bool {
 		c.Webhook != nil || c.IRC != nil || c.Lark != nil
 }
 
-// promptLaunchChannels 在 gateway 运行时自动触发 channel 重载并通知用户
+// promptLaunchChannels 在 gateway 运行时自动触发 channel 重载，显示转圈动画并通知用户
+// 无论当前是否还有 channel 配置，都需要通知 gateway 以停止已删除的 channel
 func promptLaunchChannels(cfg *config.Config) {
-	if !hasConfiguredChannels(cfg.Channels) {
-		return
-	}
-	if !hasAPIKey(cfg, modelProvider(cfg.Agent.Model)) {
-		return
-	}
 	if !isGatewayRunning(cfg) {
 		return
 	}
 
-	// gateway 运行中：尝试通知重载 channel 配置
-	url := fmt.Sprintf("http://127.0.0.1:%d/api/internal/reload", cfg.Gateway.Port)
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Post(url, "application/json", nil)
+	// gateway 运行中：触发 channel 增量重载（启动新增 / 停止已删除 / 更新白名单）
+	reloadURL := fmt.Sprintf("http://127.0.0.1:%d/api/internal/reload", cfg.Gateway.Port)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Post(reloadURL, "application/json", nil)
 	if err != nil {
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusOK {
-		fmt.Printf("  %s Gateway detected — channels reloaded automatically\n", green("✓"))
-	} else {
+	if resp.StatusCode != http.StatusOK {
 		fmt.Printf("  %s Gateway reload returned %d (restart gateway to apply)\n", yellow("!"), resp.StatusCode)
+		return
 	}
+
+	// 解析 reload 响应，提取各 channel 状态和 bind code
+	var reloadResult struct {
+		Reloaded []string `json:"reloaded"`
+		Channels map[string]struct {
+			Status   string `json:"status,omitempty"`
+			BindCode string `json:"bindCode,omitempty"`
+		} `json:"channels"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&reloadResult)
+
+	fmt.Printf("  %s Gateway detected — config reloaded automatically\n", green("✓"))
+
+	// 转圈动画：仅当有 channel 变更时显示
+	if len(reloadResult.Reloaded) > 0 {
+		channels := configuredChannelNames(cfg.Channels)
+		spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		for _, ch := range channels {
+			for i := 0; i < 6; i++ {
+				fmt.Printf("\r  %s %s channel restarting...", spinner[i%len(spinner)], ch)
+				time.Sleep(60 * time.Millisecond)
+			}
+			fmt.Printf("\r  🔄 %s channel started          \n", ch)
+		}
+	}
+
+	// 显示 bind code（新启动或重启的 channel 可能需要 bind）
+	for chName, chStatus := range reloadResult.Channels {
+		if chStatus.BindCode != "" {
+			fmt.Printf("  🔑 %s bind code: %s\n", chName, chStatus.BindCode)
+		}
+	}
+}
+
+// configuredChannelNames 返回已配置的 channel 名称列表（不含 CLI）
+func configuredChannelNames(c config.ChannelsConfig) []string {
+	var names []string
+	if c.Telegram != nil {
+		names = append(names, "telegram")
+	}
+	if c.Discord != nil {
+		names = append(names, "discord")
+	}
+	if c.Slack != nil {
+		names = append(names, "slack")
+	}
+	if c.IMessage != nil {
+		names = append(names, "imessage")
+	}
+	if c.Matrix != nil {
+		names = append(names, "matrix")
+	}
+	if c.WhatsApp != nil {
+		names = append(names, "whatsapp")
+	}
+	if c.IRC != nil {
+		names = append(names, "irc")
+	}
+	if c.Webhook != nil {
+		names = append(names, "webhook")
+	}
+	if c.Feishu != nil {
+		names = append(names, "feishu")
+	}
+	if c.WeCom != nil {
+		names = append(names, "wecom")
+	}
+	if c.WeChat != nil {
+		names = append(names, "wechat")
+	}
+	return names
 }
 
 func hasAPIKey(cfg *config.Config, provider string) bool {
@@ -1783,7 +2199,20 @@ func cyanUnder(s string) string {
 func green(s string) string  { return color(ansiGreen, s) }
 func yellow(s string) string { return color(ansiYellow, s) }
 func gray(s string) string    { return color(ansiGray, s) }
+func red(s string) string     { return color(ansiRed, s) }
 func magenta(s string) string { return color(ansiMagenta, s) }
+
+// digitEmoji 将数字转为 keycap emoji（1⃣ ~ 9⃣ / 🔟），超出范围用灰色数字
+func digitEmoji(n int) string {
+	keycaps := []string{"0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"}
+	if n >= 0 && n <= 9 {
+		return keycaps[n]
+	}
+	if n == 10 {
+		return "🔟"
+	}
+	return gray(fmt.Sprintf("[%d]", n))
+}
 
 func expandPath(in string) string {
 	v := strings.TrimSpace(in)

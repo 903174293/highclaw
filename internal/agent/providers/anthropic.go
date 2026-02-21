@@ -136,10 +136,10 @@ func (c *AnthropicClient) Chat(ctx context.Context, req *ChatRequest) (*ChatResp
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	if isAnthropicSetupToken(c.APIKey) {
-		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
-	} else {
+	if isAnthropicNativeKey(c.APIKey) {
 		httpReq.Header.Set("x-api-key", c.APIKey)
+	} else {
+		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
 	}
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 
@@ -166,8 +166,11 @@ func (c *AnthropicClient) Chat(ctx context.Context, req *ChatRequest) (*ChatResp
 	return &chatResp, nil
 }
 
-func isAnthropicSetupToken(token string) bool {
-	return strings.HasPrefix(strings.TrimSpace(token), "sk-ant-oat01-")
+// isAnthropicNativeKey 判断是否为 Anthropic 原生 key（使用 x-api-key header）
+// 第三方兼容 provider（MiniMax 等）使用 Authorization: Bearer
+func isAnthropicNativeKey(token string) bool {
+	t := strings.TrimSpace(token)
+	return strings.HasPrefix(t, "sk-ant-")
 }
 
 // applyExtendedThinking applies extended thinking mode to the model name.

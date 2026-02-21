@@ -811,12 +811,35 @@ func NewProviderFactory() *ProviderFactory {
 	registerOpenAICompatProviders(f,
 		"venice", "deepseek", "mistral", "xai", "grok", "perplexity", "groq",
 		"fireworks", "fireworks-ai", "together", "together-ai", "cohere",
-		"moonshot", "kimi", "glm", "zhipu", "zai", "z.ai", "minimax",
+		"moonshot", "kimi", "glm", "zhipu", "zai", "z.ai",
 		"qianfan", "baidu", "vercel", "vercel-ai", "cloudflare", "cloudflare-ai",
 		"opencode", "opencode-zen", "synthetic", "gemini", "google", "google-gemini",
 		"bedrock", "aws-bedrock",
 	)
+	// MiniMax 使用 Anthropic 兼容协议（/anthropic endpoint）
+	registerAnthropicCompatProviders(f, "minimax", "minimax-cn")
 	return f
+}
+
+// registerAnthropicCompatProviders 批量注册 Anthropic 兼容 provider
+func registerAnthropicCompatProviders(f *ProviderFactory, names ...string) {
+	for _, name := range names {
+		providerName := name
+		f.Register(providerName, func(cfg *config.Config) (Provider, error) {
+			pcfg, ok := resolveProviderConfig(cfg, providerName)
+			if !ok {
+				return nil, fmt.Errorf("%s API key not configured", providerName)
+			}
+			baseURL := strings.TrimSpace(pcfg.BaseURL)
+			if baseURL == "" {
+				baseURL = defaultBaseURLForProvider(providerName)
+			}
+			if strings.TrimSpace(baseURL) == "" {
+				return nil, fmt.Errorf("%s base URL not configured", providerName)
+			}
+			return &anthropicProvider{client: providers.NewAnthropicClientWithBaseURL(pcfg.APIKey, baseURL)}, nil
+		})
+	}
 }
 
 func registerOpenAICompatProviders(f *ProviderFactory, names ...string) {
@@ -878,7 +901,9 @@ func defaultBaseURLForProvider(provider string) string {
 	case "opencode", "opencode-zen":
 		return "https://api.opencode.ai"
 	case "minimax":
-		return "https://api.minimax.chat/v1"
+		return "https://api.minimax.io/anthropic/v1"
+	case "minimax-cn":
+		return "https://api.minimaxi.com/anthropic/v1"
 	case "grok":
 		return "https://api.x.ai"
 	case "gemini":
