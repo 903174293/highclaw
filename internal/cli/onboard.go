@@ -116,17 +116,7 @@ func runWizard(cfg *config.Config) error {
 	cfg.Agent.Workspace = workspace
 
 	printStep(2, 9, "AI Provider & API Key")
-	provider, apiKey, model := setupProvider()
-	cfg.Agent.Model = provider + "/" + model
-	providerCfg := config.ProviderConfig{}
-	if apiKey != "" {
-		providerCfg.APIKey = apiKey
-	}
-	providerCfg.BaseURL = providerDefaultBaseURL(provider)
-	if cfg.Agent.Providers == nil {
-		cfg.Agent.Providers = make(map[string]config.ProviderConfig)
-	}
-	cfg.Agent.Providers[provider] = providerCfg
+	cfg.Agent.Providers, cfg.Agent.Model = setupProviderLoop(cfg.Agent.Providers, cfg.Agent.Model)
 
 	printStep(3, 9, "Channels (How You Talk to HighClaw)")
 	cfg.Channels = setupChannels(cfg.Channels)
@@ -512,24 +502,48 @@ func setupWorkspace() string {
 	return ws
 }
 
-func setupProvider() (string, string, string) {
-	tiers := []string{
-		"⭐ Recommended (OpenRouter, Venice, Anthropic, OpenAI, Gemini)",
-		"⚡ Fast inference (Groq, Fireworks, Together AI)",
-		"🌐 Gateway / proxy (Vercel AI, Cloudflare AI, Amazon Bedrock)",
-		"🔬 Specialized (Moonshot/Kimi, GLM/Zhipu, MiniMax, Qianfan, Z.AI, Synthetic, OpenCode Zen, Cohere)",
-		"🏠 Local / private (Ollama — no API key needed)",
-		"🔧 Custom — bring your own OpenAI-compatible API",
+// setupProviderLoop 交互式配置 AI provider，支持已有配置快速跳过和多 provider 循环配置。
+// 返回更新后的 providers map 和当前选中的 model（格式 "provider/model"）。
+func setupProviderLoop(existingProviders map[string]config.ProviderConfig, currentModel string) (map[string]config.ProviderConfig, string) {
+	providers := existingProviders
+	if providers == nil {
+		providers = make(map[string]config.ProviderConfig)
 	}
-	tier := promptSelect("Select provider category", tiers, 0)
-	fmt.Printf("  Select provider category: %s\n", tiers[tier])
-	fmt.Println()
 
-	type opt struct{ Key, Label string }
-	var providers []opt
-	switch tier {
-	case 0:
-		providers = []opt{
+	// 第一层：已有配置时提供快速跳过
+	if hasAnyProviderKey(providers) && currentModel != "" {
+		ap := modelProvider(currentModel)
+		am := modelName(currentModel)
+		fmt.Println()
+		fmt.Println("  Current configuration:")
+		for name, pcfg := range providers {
+			if strings.TrimSpace(pcfg.APIKey) == "" {
+				continue
+			}
+			marker := fmt.Sprintf("    %s %-14s %s", "🟢", name, maskToken(pcfg.APIKey, 10))
+			if name == ap {
+				marker += cyan("  ← current: "+am)
+			}
+			fmt.Println(marker)
+		}
+		fmt.Println()
+		if promptYesNo("Keep current provider & model?", true) {
+			fmt.Printf("  %s Provider configuration unchanged\n", green("✓"))
+			fmt.Println()
+			return providers, currentModel
+		}
+	}
+
+	selectedModel := currentModel
+
+	// 第二层：循环配置（Page A → Page B → key → model → 回 Page A）
+	type provOpt struct{ Key, Label string }
+
+	allTiers := []struct {
+		Label     string
+		Providers []provOpt
+	}{
+		{"⭐ Recommended (OpenRouter, Venice, Anthropic, OpenAI, Gemini)", []provOpt{
 			{"openrouter", "OpenRouter — 200+ models, 1 API key (recommended)"},
 			{"venice", "Venice AI — privacy-first (Llama, Opus)"},
 			{"anthropic", "Anthropic — Claude Sonnet & Opus (direct)"},
@@ -539,21 +553,18 @@ func setupProvider() (string, string, string) {
 			{"xai", "xAI — Grok 3 & 4"},
 			{"perplexity", "Perplexity — search-augmented AI"},
 			{"gemini", "Google Gemini — Gemini 2.0 Flash & Pro (supports CLI auth)"},
-		}
-	case 1:
-		providers = []opt{
+		}},
+		{"⚡ Fast inference (Groq, Fireworks, Together AI)", []provOpt{
 			{"groq", "Groq — ultra-fast LPU inference"},
 			{"fireworks", "Fireworks AI — fast open-source inference"},
 			{"together", "Together AI — open-source model hosting"},
-		}
-	case 2:
-		providers = []opt{
+		}},
+		{"🌐 Gateway / proxy (Vercel AI, Cloudflare AI, Amazon Bedrock)", []provOpt{
 			{"vercel", "Vercel AI Gateway"},
 			{"cloudflare", "Cloudflare AI Gateway"},
 			{"bedrock", "Amazon Bedrock — AWS managed models"},
-		}
-	case 3:
-		providers = []opt{
+		}},
+		{"🔬 Specialized (Moonshot/Kimi, GLM/Zhipu, MiniMax, Qianfan, Z.AI, Synthetic, OpenCode Zen, Cohere)", []provOpt{
 			{"moonshot", "Moonshot — Kimi & Kimi Coding"},
 			{"glm", "GLM — ChatGLM / Zhipu models"},
 			{"minimax", "MiniMax — MiniMax AI models"},
@@ -562,86 +573,247 @@ func setupProvider() (string, string, string) {
 			{"synthetic", "Synthetic — Synthetic AI models"},
 			{"opencode", "OpenCode Zen — code-focused AI"},
 			{"cohere", "Cohere — Command R+ & embeddings"},
-		}
-	case 4:
-		providers = []opt{{"ollama", "Ollama — local models (Llama, Mistral, Phi)"}}
-	default:
-		fmt.Println()
-		fmt.Println("  Custom Provider Setup — any OpenAI-compatible API")
-		printBullet("HighClaw works with ANY API that speaks the OpenAI chat completions format.")
-		printBullet("Examples: LiteLLM, LocalAI, vLLM, text-generation-webui, LM Studio, etc.")
-		fmt.Println()
-		baseURL := strings.TrimRight(strings.TrimSpace(promptString("API base URL (e.g. http://localhost:1234 or https://my-api.com)", "")), "/")
-		if baseURL == "" {
-			baseURL = "https://api.openai.com/v1"
-		}
-		key := strings.TrimSpace(promptString("API key (or Enter to skip if not needed)", ""))
-		model := strings.TrimSpace(promptString("Model name (e.g. llama3, gpt-4o, mistral)", "default"))
-		if model == "" {
-			model = "default"
-		}
-		fmt.Printf("  %s Provider: %s | Model: %s\n", green("✓"), green("custom:"+baseURL), green(model))
-		fmt.Println()
-		return "custom:" + baseURL, key, model
+		}},
+		{"🏠 Local / private (Ollama — no API key needed)", []provOpt{
+			{"ollama", "Ollama — local models (Llama, Mistral, Phi)"},
+		}},
 	}
 
-	labels := make([]string, 0, len(providers))
-	for _, p := range providers {
-		labels = append(labels, p.Label)
-	}
-	providerIdx := promptSelect("Select your AI provider", labels, 0)
-	provider := providers[providerIdx].Key
-	fmt.Printf("  Select your AI provider: %s\n", labels[providerIdx])
-	fmt.Println()
-
-	apiKey := ""
-	if provider == "ollama" {
-		printBullet("Ollama runs locally — no API key needed!")
-	} else if provider == "gemini" || provider == "google" || provider == "google-gemini" {
-		if hasGeminiCLICredentials() {
-			printBullet("✓ Gemini CLI credentials detected! You can skip the API key.")
-			printBullet("HighClaw will reuse your existing Gemini CLI authentication.")
+	for {
+		// Page A：分类选择 + 已配置摘要 + Done
+		if hasAnyProviderKey(providers) {
 			fmt.Println()
-			useCLI := promptYesNo("Use existing Gemini CLI authentication?", true)
-			if useCLI {
-				fmt.Printf("  %s Using Gemini CLI OAuth tokens\n", green("✓"))
+			fmt.Println("  Configured providers:")
+			for name, pcfg := range providers {
+				if strings.TrimSpace(pcfg.APIKey) == "" {
+					continue
+				}
+				ap := modelProvider(selectedModel)
+				am := modelName(selectedModel)
+				line := fmt.Sprintf("    🟢 %-14s %s", name, maskToken(pcfg.APIKey, 10))
+				if name == ap {
+					line += cyan("  ← current: "+am)
+				}
+				fmt.Println(line)
+			}
+			fmt.Println()
+		}
+
+		tierLabels := make([]string, 0, len(allTiers)+2)
+		for _, t := range allTiers {
+			tierLabels = append(tierLabels, t.Label)
+		}
+		tierLabels = append(tierLabels, "🔧 Custom — bring your own OpenAI-compatible API")
+		if hasAnyProviderKey(providers) {
+			tierLabels = append(tierLabels, green("🏁 Done — finish provider setup"))
+		}
+
+		selectTitle := "Select provider category"
+		if hasAnyProviderKey(providers) {
+			selectTitle = "Select provider category (or Done to finish)"
+		}
+		tierIdx := promptSelect(selectTitle, tierLabels, 0)
+		fmt.Printf("  Select provider category: %s\n", tierLabels[tierIdx])
+		fmt.Println()
+
+		// Done 选项（分隔线和 Done 两个条目，取最后一个）
+		if hasAnyProviderKey(providers) && tierIdx == len(tierLabels)-1 {
+			// 校验当前 model 的 provider 是否有 key
+			mp := modelProvider(selectedModel)
+			if pcfg, ok := providers[mp]; !ok || strings.TrimSpace(pcfg.APIKey) == "" {
+				// 当前 model 的 provider 无 key，需重新选 model
+				fmt.Printf("  ⚠️  Current model (%s) has no API key. Please select a model from a configured provider.\n", selectedModel)
+				fmt.Println()
+				selectedModel = pickModelFromConfigured(providers)
+			}
+			fmt.Printf("  %s Provider: %s | Model: %s\n", green("✓"), green(modelProvider(selectedModel)), green(modelName(selectedModel)))
+			fmt.Println()
+			return providers, selectedModel
+		}
+
+
+		// Custom provider（倒数第三个，或无 Done 时最后一个）
+		customIdx := len(allTiers)
+		if tierIdx == customIdx {
+			fmt.Println("  Custom Provider Setup — any OpenAI-compatible API")
+			printBullet("HighClaw works with ANY API that speaks the OpenAI chat completions format.")
+			printBullet("Examples: LiteLLM, LocalAI, vLLM, text-generation-webui, LM Studio, etc.")
+			fmt.Println()
+			baseURL := strings.TrimRight(strings.TrimSpace(promptString("API base URL (e.g. http://localhost:1234 or https://my-api.com)", "")), "/")
+			if baseURL == "" {
+				baseURL = "https://api.openai.com/v1"
+			}
+			key := strings.TrimSpace(promptString("API key (or Enter to skip if not needed)", ""))
+			mdl := strings.TrimSpace(promptString("Model name (e.g. llama3, gpt-4o, mistral)", "default"))
+			if mdl == "" {
+				mdl = "default"
+			}
+			customName := "custom:" + baseURL
+			providers[customName] = config.ProviderConfig{APIKey: key, BaseURL: baseURL}
+			selectedModel = customName + "/" + mdl
+			fmt.Printf("  %s Provider: %s | Model: %s\n", green("✓"), green(customName), green(mdl))
+			fmt.Println()
+			continue
+		}
+
+		// 正常 tier：进入 Page B
+		if tierIdx >= len(allTiers) {
+			continue
+		}
+		tier := allTiers[tierIdx]
+
+		// Page B：provider 列表（带 🟢 标记）
+		pLabels := make([]string, 0, len(tier.Providers))
+		for _, p := range tier.Providers {
+			label := p.Label
+			if pcfg, ok := providers[p.Key]; ok && strings.TrimSpace(pcfg.APIKey) != "" {
+				label += gray("  ← ") + green("🟢 "+maskToken(pcfg.APIKey, 10))
+			}
+			pLabels = append(pLabels, label)
+		}
+		provIdx := promptSelect("Select your AI provider", pLabels, 0)
+		prov := tier.Providers[provIdx]
+		fmt.Printf("  Select your AI provider: %s\n", prov.Label)
+		fmt.Println()
+
+		// API key 输入
+		apiKey := ""
+		existingKey := ""
+		if pcfg, ok := providers[prov.Key]; ok {
+			existingKey = pcfg.APIKey
+		}
+
+		if prov.Key == "ollama" {
+			printBullet("Ollama runs locally — no API key needed!")
+			providers[prov.Key] = config.ProviderConfig{BaseURL: providerDefaultBaseURL(prov.Key)}
+		} else if prov.Key == "gemini" || prov.Key == "google" || prov.Key == "google-gemini" {
+			if hasGeminiCLICredentials() {
+				printBullet("✓ Gemini CLI credentials detected! You can skip the API key.")
+				printBullet("HighClaw will reuse your existing Gemini CLI authentication.")
+				fmt.Println()
+				useCLI := promptYesNo("Use existing Gemini CLI authentication?", true)
+				if useCLI {
+					fmt.Printf("  %s Using Gemini CLI OAuth tokens\n", green("✓"))
+					apiKey = ""
+				} else {
+					printBullet("Get your API key at: https://aistudio.google.com/app/apikey")
+					apiKey = strings.TrimSpace(promptString("Paste your Gemini API key", ""))
+				}
+			} else if strings.TrimSpace(os.Getenv("GEMINI_API_KEY")) != "" {
+				printBullet("✓ GEMINI_API_KEY environment variable detected!")
 				apiKey = ""
 			} else {
-				printBullet("Get your API key at: https://aistudio.google.com/app/apikey")
-				apiKey = strings.TrimSpace(promptString("Paste your Gemini API key", ""))
+				if existingKey != "" {
+					printBullet("Current key: " + maskToken(existingKey, 10))
+					if promptYesNo("Keep current key?", true) {
+						apiKey = existingKey
+					} else {
+						printBullet("Get your API key at: https://aistudio.google.com/app/apikey")
+						fmt.Println()
+						apiKey = strings.TrimSpace(promptString("Paste new Gemini API key (Enter to clear)", ""))
+						if apiKey == "" {
+							delete(providers, prov.Key)
+							fmt.Printf("  🗑️  API key cleared for %s\n", prov.Key)
+							fmt.Println()
+							continue
+						}
+					}
+				} else {
+					printBullet("Get your API key at: https://aistudio.google.com/app/apikey")
+					apiKey = strings.TrimSpace(promptString("Paste your Gemini API key (or press Enter to skip)", ""))
+				}
 			}
-		} else if strings.TrimSpace(os.Getenv("GEMINI_API_KEY")) != "" {
-			printBullet("✓ GEMINI_API_KEY environment variable detected!")
-			apiKey = ""
+			if apiKey == "" && existingKey == "" {
+				fmt.Printf("  ⚠️  No API key provided. Skipping.\n")
+				continue
+			}
+			providers[prov.Key] = config.ProviderConfig{APIKey: apiKey, BaseURL: providerDefaultBaseURL(prov.Key)}
 		} else {
-			printBullet("Get your API key at: https://aistudio.google.com/app/apikey")
-			printBullet("Or run `gemini` CLI to authenticate (tokens will be reused).")
-			fmt.Println()
-			apiKey = strings.TrimSpace(promptString("Paste your Gemini API key (or press Enter to skip)", ""))
+			if existingKey != "" {
+				printBullet("Current key: " + maskToken(existingKey, 10))
+				if promptYesNo("Keep current key?", true) {
+					apiKey = existingKey
+				} else {
+					if u := apiKeyURL(prov.Key); u != "" {
+						printBullet("Get your API key at: " + u)
+					}
+					fmt.Println()
+					apiKey = strings.TrimSpace(promptString("Paste new API key (Enter to clear)", ""))
+					if apiKey == "" {
+						delete(providers, prov.Key)
+						fmt.Printf("  🗑️  API key cleared for %s\n", prov.Key)
+						fmt.Println()
+						continue
+					}
+				}
+			} else {
+				if u := apiKeyURL(prov.Key); u != "" {
+					printBullet("Get your API key at: " + u)
+				}
+				printBullet("You can also set it later via env var or config file.")
+				fmt.Println()
+				apiKey = strings.TrimSpace(promptString("Paste your API key (or press Enter to skip)", ""))
+				if apiKey == "" {
+					fmt.Printf("  ⚠️  No API key provided. Skipping.\n")
+					continue
+				}
+			}
+			providers[prov.Key] = config.ProviderConfig{APIKey: apiKey, BaseURL: providerDefaultBaseURL(prov.Key)}
 		}
-	} else {
-		if u := apiKeyURL(provider); u != "" {
-			printBullet("Get your API key at: " + u)
+
+		// 选模型
+		models := modelsForProvider(prov.Key)
+		mLabels := make([]string, 0, len(models))
+		for _, m := range models {
+			mLabels = append(mLabels, m.Label)
 		}
-		printBullet("You can also set it later via env var or config file.")
+		modelIdx := promptSelect("Select your default model", mLabels, 0)
+		mdl := models[modelIdx].ID
+		selectedModel = prov.Key + "/" + mdl
+		fmt.Printf("  Select your default model: %s\n", mLabels[modelIdx])
+		fmt.Printf("  %s Provider: %s | Model: %s\n", green("✓"), green(prov.Key), green(mdl))
 		fmt.Println()
-		apiKey = strings.TrimSpace(promptString("Paste your API key (or press Enter to skip)", ""))
-		if apiKey == "" {
-			printBullet("Skipped. Set " + providerEnvVar(provider) + " or edit config.yaml later.")
+	}
+}
+
+// hasAnyProviderKey 检查是否有至少一个 provider 配置了 API key
+func hasAnyProviderKey(providers map[string]config.ProviderConfig) bool {
+	for _, pcfg := range providers {
+		if strings.TrimSpace(pcfg.APIKey) != "" {
+			return true
 		}
 	}
+	return false
+}
 
-	models := modelsForProvider(provider)
+// pickModelFromConfigured 从已配置 key 的 provider 中选择 model
+func pickModelFromConfigured(providers map[string]config.ProviderConfig) string {
+	var configured []string
+	for name, pcfg := range providers {
+		if strings.TrimSpace(pcfg.APIKey) != "" {
+			configured = append(configured, name)
+		}
+	}
+	if len(configured) == 0 {
+		return ""
+	}
+	if len(configured) == 1 {
+		prov := configured[0]
+		models := modelsForProvider(prov)
+		if len(models) > 0 {
+			return prov + "/" + models[0].ID
+		}
+		return prov + "/default"
+	}
+	provIdx := promptSelect("Select provider for default model", configured, 0)
+	prov := configured[provIdx]
+	models := modelsForProvider(prov)
 	mLabels := make([]string, 0, len(models))
 	for _, m := range models {
 		mLabels = append(mLabels, m.Label)
 	}
 	modelIdx := promptSelect("Select your default model", mLabels, 0)
-	model := models[modelIdx].ID
-	fmt.Printf("  Select your default model: %s\n", mLabels[modelIdx])
-	fmt.Printf("  %s Provider: %s | Model: %s\n", green("✓"), green(provider), green(model))
-	fmt.Println()
-	return provider, apiKey, model
+	return prov + "/" + models[modelIdx].ID
 }
 
 func setupChannels(existing config.ChannelsConfig) config.ChannelsConfig {
