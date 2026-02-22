@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 520" font-family="'Segoe UI', system-ui, -apple-system, sans-serif">
+  <defs>
+    <filter id="shadow" x="-4%" y="-4%" width="108%" height="108%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.2"/>
+    </filter>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#080d14"/>
+      <stop offset="100%" stop-color="#0f1520"/>
+    </linearGradient>
+    <linearGradient id="coreGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a1a2a"/>
+      <stop offset="100%" stop-color="#0e2236"/>
+    </linearGradient>
+    <filter id="glowCyan" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrowCyan" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#00e5ff"/></marker>
+  </defs>
+  <rect width="1100" height="520" fill="url(#bgGrad)" rx="16"/>
+  <text x="550" y="42" text-anchor="middle" fill="#00e5ff" font-size="22" font-weight="700" filter="url(#glowCyan)">Multi-Channel AI Gateway</text>
+  <text x="550" y="66" text-anchor="middle" fill="#94a3b8" font-size="13">One binary, 12+ messaging platforms, rich text and images — deploy anywhere</text>
+  <rect x="400" y="170" width="300" height="180" rx="16" fill="url(#coreGrad)" stroke="#00e5ff" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="550" y="210" text-anchor="middle" fill="#00e5ff" font-size="18" font-weight="700">HighClaw Core</text>
+  <text x="550" y="236" text-anchor="middle" fill="#e2e8f0" font-size="12">AI Agent / Memory / Tools</text>
+  <line x1="430" y1="250" x2="670" y2="250" stroke="#1e3a5f" stroke-width="1"/>
+  <text x="550" y="272" text-anchor="middle" fill="#94a3b8" font-size="11">22+ AI Providers</text>
+  <text x="550" y="290" text-anchor="middle" fill="#94a3b8" font-size="11">SQLite Hybrid Search</text>
+  <text x="550" y="308" text-anchor="middle" fill="#94a3b8" font-size="11">Session Routing</text>
+  <text x="550" y="326" text-anchor="middle" fill="#94a3b8" font-size="11">Security and Pairing</text>
+  <text x="550" y="344" text-anchor="middle" fill="#94a3b8" font-size="11">Skill System</text>
+  <rect x="30" y="90" width="160" height="40" rx="10" fill="#0a1a2a" stroke="#06d6d6" stroke-width="1" filter="url(#shadow)"/>
+  <text x="110" y="115" text-anchor="middle" fill="#e2e8f0" font-size="13">Telegram</text>
+  <line x1="190" y1="110" x2="400" y2="230" stroke="#06d6d6" stroke-width="1" stroke-dasharray="6,3" marker-end="url(#arrowCyan)"/>
+  <rect x="30" y="150" width="160" height="40" rx="10" fill="#0a1a2a" stroke="#5b6ef5" stroke-width="1" filter="url(#shadow)"/>
+  <text x="110" y="175" text-anchor="middle" fill="#e2e8f0" font-size="13">Discord</text>
+  <line x1="190" y1="170" x2="400" y2="245" stroke="#5b6ef5" stroke-width="1" stroke-dasharray="6,3" marker-end="url(#arrowCyan)"/>
+  <rect x="30" y="210" width="160" height="40" rx="10" fill="#0a1a2a" stroke="#e01e5a" stroke-width="1" filter="url(#shadow)"/>
+  <text x="110" y="235" text-anchor="middle" fill="#e2e8f0" font-size="13">Slack</text>
+  <line x1="190" y1="230" x2="400" y2="260" stroke="#e01e5a" stroke-width="1" stroke-dasharray="6,3" marker-end="url(#arrowCyan)"/>
+  <rect x="30" y="270" width="160" height="40" rx="10" fill="#0a1a2a" stroke="#25d366" stroke-width="1" filter="url(#shadow)"/>
+  <text x="110" y="295" text-anchor="middle" fill="#e2e8f0" font-size="13">WhatsApp</text>
+  <line x1="190" y1="290" x2="400" y2="275" stroke="#25d366" stroke-width="1" stroke-dasharray="6,3" marker-end="url(#arrowCyan)"/>
+  <rect x="30" y="330" width="160" height="40" rx="10" fill="#0a1a2a" stroke="#3370ff" stroke-width="1" filter="url(#shadow)"/>
+  <text x="110" y="355" text-anchor="middle" fill="#e2e8f0" font-size="13">Feishu / Lark</text>
+  <line x1="190" y1="350" x2="400" y2="290" stroke="#3370ff" stroke-width="1" stroke-dasharray="6,3" marker-end="url(#arrowCyan)"/>
+  <rect x="30" y="390" width="160" height="40" rx="10" fill="#0a1a2a" stroke="#07c160" stroke-width="1" filter="url(#shadow)"/>
+  <text x="110" y="415" text-anchor="middle" fill="#e2e8f0" font-size="13">WeChat / WeCom</text>
+  <line x1="190" y1="410" x2="400" y2="310" stroke="#07c160" stroke-width="1" stroke-dasharray="6,3" marker-end="url(#arrowCyan)"/>
+  <rect x="910" y="90" width="160" height="40" rx="10" fill="#0a1a2a" stroke="#0088cc" stroke-width="1" filter="url(#shadow)"/>
+  <text x="990" y="115" text-anchor="middle" fill="#e2e8f0" font-size="13">iMessage</text>
+  <line x1="700" y1="230" x2="910" y2="110" stroke="#0088cc" stroke-width="1" stroke-dasharray="6,3" marker-end="url(#arrowCyan)"/>
+  <rect x="910" y="150" width="160" height="40" rx="10" fill="#0a1a2a" stroke="#8b5cf6" stroke-width="1" filter="url(#shadow)"/>
+  <text x="990" y="175" text-anchor="middle" fill="#e2e8f0" font-size="13">Matrix</text>
+  <line x1="700" y1="245" x2="910" y2="170" stroke="#8b5cf6" stroke-width="1" stroke-dasharray="6,3" marker-end="url(#arrowCyan)"/>
+  <rect x="910" y="210" width="160" height="40" rx="10" fill="#0a1a2a" stroke="#f59e0b" stroke-width="1" filter="url(#shadow)"/>
+  <text x="990" y="235" text-anchor="middle" fill="#e2e8f0" font-size="13">Webhook</text>
+  <line x1="700" y1="260" x2="910" y2="230" stroke="#f59e0b" stroke-width="1" stroke-dasharray="6,3" marker-end="url(#arrowCyan)"/>
+  <rect x="910" y="270" width="160" height="40" rx="10" fill="#0a1a2a" stroke="#cc342d" stroke-width="1" filter="url(#shadow)"/>
+  <text x="990" y="295" text-anchor="middle" fill="#e2e8f0" font-size="13">IRC</text>
+  <line x1="700" y1="275" x2="910" y2="290" stroke="#cc342d" stroke-width="1" stroke-dasharray="6,3" marker-end="url(#arrowCyan)"/>
+  <rect x="910" y="330" width="160" height="40" rx="10" fill="#0a1a2a" stroke="#3a76f0" stroke-width="1" filter="url(#shadow)"/>
+  <text x="990" y="355" text-anchor="middle" fill="#e2e8f0" font-size="13">Signal</text>
+  <line x1="700" y1="290" x2="910" y2="350" stroke="#3a76f0" stroke-width="1" stroke-dasharray="6,3" marker-end="url(#arrowCyan)"/>
+  <rect x="910" y="390" width="160" height="40" rx="10" fill="#0a1a2a" stroke="#00e5ff" stroke-width="1" filter="url(#shadow)"/>
+  <text x="990" y="415" text-anchor="middle" fill="#e2e8f0" font-size="13">CLI / TUI</text>
+  <line x1="700" y1="310" x2="910" y2="410" stroke="#00e5ff" stroke-width="1" stroke-dasharray="6,3" marker-end="url(#arrowCyan)"/>
+  <rect x="130" y="465" width="170" height="34" rx="8" fill="#0e2236" stroke="#00e5ff" stroke-width="0.8"/>
+  <text x="215" y="487" text-anchor="middle" fill="#00e5ff" font-size="12" font-weight="600">End-to-End Security</text>
+  <rect x="330" y="465" width="170" height="34" rx="8" fill="#0e2236" stroke="#00e5ff" stroke-width="0.8"/>
+  <text x="415" y="487" text-anchor="middle" fill="#00e5ff" font-size="12" font-weight="600">Hot-Reload Channels</text>
+  <rect x="530" y="465" width="170" height="34" rx="8" fill="#0e2236" stroke="#00e5ff" stroke-width="0.8"/>
+  <text x="615" y="487" text-anchor="middle" fill="#00e5ff" font-size="12" font-weight="600">Persistent Memory</text>
+  <rect x="730" y="465" width="170" height="34" rx="8" fill="#0e2236" stroke="#00e5ff" stroke-width="0.8"/>
+  <text x="815" y="487" text-anchor="middle" fill="#00e5ff" font-size="12" font-weight="600">Single Go Binary</text>
+</svg>

@@ -5,19 +5,13 @@
 <h1 align="center">HighClaw <img src="images/highclaw.png" alt="HighClaw" style="height:1em;width:auto;vertical-align:-0.12em;" /></h1>
 
 <p align="center">
-  <a href="./README.zh.md"><img src="https://img.shields.io/badge/📖_中文文档-README.zh.md-0A66C2?style=for-the-badge" height="36" alt="中文文档" /></a>
-  &nbsp;
-  <a href="./README.md"><img src="https://img.shields.io/badge/📖_English-README.md-2EA043?style=for-the-badge" height="36" alt="English" /></a>
-</p>
-
-<p align="center">
   <strong>High performance. Built for speed and reliability. 100% Go. 100% Agnostic.</strong><br>
   ⚡️ <strong>HighClaw keeps full feature coverage with an independent Go implementation.</strong>
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
-  <a href="https://buymeacoffee.com/z903174293h"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Donate-yellow.svg?style=flat&logo=buy-me-a-coffee" alt="Buy Me a Coffee" /></a>
+  <a href="https://buymeacoffee.com/nx36683g"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Donate-yellow.svg?style=flat&logo=buy-me-a-coffee" alt="Buy Me a Coffee" /></a>
 </p>
 
 Fast, small, and fully autonomous AI assistant infrastructure — deploy anywhere, swap anything.
@@ -33,6 +27,35 @@ Go binary · modular traits · 22+ providers · pluggable channels/tools/memory 
 - 🚀 **Deployment Efficiency Advantage:** No Node/Python runtime bootstrap required; install + start in minutes.
 - ⚡ **Operationally Reliable:** Strong defaults for gateway auth, memory persistence, and channel safety.
 - 🌍 **True Portability:** Cross-platform binaries for macOS, Linux, and Windows (amd64/arm64).
+
+### Connect Your AI to Any Messaging Platform
+
+HighClaw turns your AI assistant into a **multi-channel gateway** — one binary connects to 12+ messaging platforms with rich text, images, and interactive responses. No separate adapters, no microservices, no glue code.
+
+<p align="center">
+  <img src="images/channels-overview.svg" alt="HighClaw Multi-Channel Overview" width="900" />
+</p>
+
+| Platform | Protocol | Rich Text | Images | Status |
+|----------|----------|-----------|--------|--------|
+| **Telegram** | Bot API (polling) | Markdown | Yes | Production |
+| **Discord** | Gateway WebSocket | Markdown | Yes | Production |
+| **Slack** | Events API | mrkdwn | Yes | Production |
+| **WhatsApp** | Cloud API (webhook) | Plain | Yes | Production |
+| **Feishu / Lark** | WebSocket | Rich text | Yes | Production |
+| **WeCom** | Callback API | Markdown | Yes | Production |
+| **WeChat** | MP API | Plain | Yes | Beta |
+| **iMessage** | AppleScript bridge | Plain | No | Beta |
+| **Matrix** | Client-Server API | HTML | Yes | Beta |
+| **Webhook** | HTTP POST | JSON | Yes | Production |
+| **IRC** | IRC protocol | Plain | No | Beta |
+| **Signal** | signal-cli bridge | Plain | Yes | Planned |
+
+**Key differentiators:**
+- **Hot-reload** — add or remove channels without restarting the gateway.
+- **Per-sender sessions** — each user gets isolated conversation history across channels.
+- **Bind authentication** — secure one-time code pairing for private bots.
+- **Unified API** — same AI capabilities regardless of which channel the user connects from.
 
 ### Why teams pick HighClaw
 
@@ -459,7 +482,6 @@ CGO (C native)     ▌                                                    10~100
 | CLI memory inspection | ✅ search/get/list/status/sync/reset | ❌ | ❌ | ❌ |
 | Offline operation | ✅ Works without network | ❌ | ❌ | ❌ |
 | Single binary deployment | ✅ | ❌ | ❌ | ❌ |
-| Parameterized queries (no SQL injection) | ✅ | N/A | N/A | N/A |
 | Parameterized queries (no SQL injection) | ✅ | N/A | N/A | N/A |
 
 #### Configuration
@@ -1197,7 +1219,7 @@ git push --no-verify
 
 HighClaw is an open-source project maintained with passion. If you find it useful and would like to support its continued development, hardware for testing, and coffee for the maintainer, you can support me here:
 
-<a href="https://buymeacoffee.com/z903174293h"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Donate-yellow.svg?style=for-the-badge&logo=buy-me-a-coffee" alt="Buy Me a Coffee" /></a>
+<a href="https://buymeacoffee.com/nx36683g"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Donate-yellow.svg?style=for-the-badge&logo=buy-me-a-coffee" alt="Buy Me a Coffee" /></a>
 
 ## License
 
